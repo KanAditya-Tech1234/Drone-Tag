@@ -1,0 +1,552 @@
+{
+  "info": {
+    "name": "Drone Tag API",
+    "description": "Drone Tag server (temporary Render test service). Set the environment values first: baseUrl, deviceKey, adminKey, trackerId.\nAll values sent are synthetic TEST DATA. See DRONE_TEAM_API_GUIDE.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "No key needed. 200 when the service is running."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Location + images (POST /api/data)",
+      "item": [
+        {
+          "name": "Send position (JSON)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TrackerId\": \"{{trackerId}}\",\n  \"Latitude\": \"23.057984\",\n  \"Longitude\": \"72.521018\",\n  \"Altitude\": \"15\",\n  \"Timestamp\": \"2026-10-27 10:00:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Send position + image (form-data)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "TrackerId",
+                  "value": "{{trackerId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "Latitude",
+                  "value": "23.0581",
+                  "type": "text"
+                },
+                {
+                  "key": "Longitude",
+                  "value": "72.5212",
+                  "type": "text"
+                },
+                {
+                  "key": "Altitude",
+                  "value": "18",
+                  "type": "text"
+                },
+                {
+                  "key": "Timestamp",
+                  "value": "2026-10-27 10:00:10",
+                  "type": "text"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": "postman/sample-photo.jpg"
+                }
+              ]
+            },
+            "description": "Choose any image file for the \"image\" field."
+          }
+        },
+        {
+          "name": "Send image as raw body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "image/jpeg"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/data?trackerId={{trackerId}}&lat=23.0583&lon=72.5214&alt=20&ts=2026-10-27%2010:00:20&filename=photo.jpg",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data"
+              ],
+              "query": [
+                {
+                  "key": "trackerId",
+                  "value": "{{trackerId}}"
+                },
+                {
+                  "key": "lat",
+                  "value": "23.0583"
+                },
+                {
+                  "key": "lon",
+                  "value": "72.5214"
+                },
+                {
+                  "key": "alt",
+                  "value": "20"
+                },
+                {
+                  "key": "ts",
+                  "value": "2026-10-27%2010:00:20"
+                },
+                {
+                  "key": "filename",
+                  "value": "photo.jpg"
+                }
+              ]
+            },
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": "postman/sample-photo.jpg"
+              }
+            },
+            "description": "Body → binary → choose an image file."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Telemetry",
+      "item": [
+        {
+          "name": "Send telemetry",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  const json = pm.response.json();",
+                  "  pm.environment.set('telemetryId', json.telemetryId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/telemetry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "telemetry"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TrackerId\": \"{{trackerId}}\",\n  \"Timestamp\": \"2026-10-27T10:00:30Z\",\n  \"BatteryPercent\": 76.5,\n  \"BatteryVoltage\": 22.4,\n  \"FlightStatus\": \"FLYING\",\n  \"SprayStatus\": \"ON\",\n  \"TankLevelPercent\": 64,\n  \"FlowRateLpm\": 1.8,\n  \"SpeedMps\": 5.2,\n  \"HeadingDeg\": 270,\n  \"Satellites\": 14,\n  \"SignalDbm\": -71,\n  \"Latitude\": 23.0585,\n  \"Longitude\": 72.5216,\n  \"Altitude\": 12,\n  \"Extra\": {\n    \"pumpPressureBar\": 2.1\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Read telemetry of the tracker",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/telemetry/{{trackerId}}?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "telemetry",
+                "{{trackerId}}"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Latest telemetry of every tracker",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/telemetry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "telemetry"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Configuration files",
+      "item": [
+        {
+          "name": "Upload configuration file (form-data)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  const json = pm.response.json();",
+                  "  pm.environment.set('configId', json.config.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "config"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "TrackerId",
+                  "value": "{{trackerId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "Description",
+                  "value": "Test mission plan",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "description": "Choose a .json/.plan/.yaml/.txt/.cfg/... file (max 1 MB) for the \"file\" field."
+          }
+        },
+        {
+          "name": "Upload configuration file (raw body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/config?trackerId={{trackerId}}&filename=params.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "config"
+              ],
+              "query": [
+                {
+                  "key": "trackerId",
+                  "value": "{{trackerId}}"
+                },
+                {
+                  "key": "filename",
+                  "value": "params.txt"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "SPRAY_RATE_LPM=1.8\nFLIGHT_HEIGHT_M=3\n"
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "List configuration files",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/config/{{trackerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "config",
+                "{{trackerId}}"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Download a configuration file",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Device-Key",
+                "value": "{{deviceKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/config/{{trackerId}}?file={{configId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "config",
+                "{{trackerId}}"
+              ],
+              "query": [
+                {
+                  "key": "file",
+                  "value": "{{configId}}"
+                }
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Read data",
+      "item": [
+        {
+          "name": "Tracker data (points, photos, delay)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/data/{{trackerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data",
+                "{{trackerId}}"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Latest image of the tracker",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/data/{{trackerId}}?photo=latest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data",
+                "{{trackerId}}"
+              ],
+              "query": [
+                {
+                  "key": "photo",
+                  "value": "latest"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "All trackers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Dashboard settings (admin key)",
+      "item": [
+        {
+          "name": "Set the transmission delay",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"intervalMs\": 10000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      ]
+    }
+  ]
+}

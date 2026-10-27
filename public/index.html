@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Drone Live Tracker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+  #map { height: 100vh; width: 100%; background: #111; }
+
+  /* Small control box: legend + delay + clear (no tracker status panel). */
+  #controls {
+    position: absolute; left: 12px; bottom: 24px; z-index: 1000;
+    background: rgba(20,20,20,0.88); color: #fff; padding: 10px 12px;
+    border-radius: 10px; font-size: 12px; width: 190px; box-sizing: border-box;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
+  #controls .legend { display: grid; grid-template-columns: 18px 1fr; gap: 4px 6px; align-items: center; margin-bottom: 8px; }
+  #controls .dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box; }
+  #controls label { display: block; opacity: 0.7; margin-bottom: 3px; }
+  #delaySelect {
+    width: 100%; padding: 5px; border-radius: 6px; border: 1px solid #444;
+    background: #222; color: #fff; font-size: 12px;
+  }
+  #delayStatus { font-size: 11px; min-height: 13px; margin-top: 3px; }
+  #delayStatus.ok { color: #4caf50; }
+  #delayStatus.err { color: #f44336; }
+  #resetBtn {
+    margin-top: 6px; width: 100%; padding: 5px 0; border: none;
+    border-radius: 6px; background: #333; color: #fff; cursor: pointer; font-size: 12px;
+  }
+  #resetBtn:hover { background: #444; }
+
+  /* Hover pop-up for every plotted point. */
+  .leaflet-tooltip.pt-tip {
+    padding: 0; border: none; border-radius: 10px; overflow: hidden;
+    background: #fff; box-shadow: 0 6px 22px rgba(0,0,0,0.35); white-space: normal;
+  }
+  .pt-tip .head { padding: 8px 10px; font-size: 13px; line-height: 1.5; color: #111; }
+  .pt-tip .head b { display: inline-block; min-width: 38px; color: #555; font-weight: 600; }
+  .pt-tip img { display: block; width: 360px; max-width: 70vw; height: auto; background: #000; }
+  .pt-tip .noimg { padding: 14px 10px; font-size: 12px; color: #777; background: #f3f3f3; text-align: center; width: 220px; }
+
+  .arrow-marker svg { transition: transform 0.4s; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+
+  #lightbox {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,0.9); align-items: center; justify-content: center; cursor: zoom-out;
+  }
+  #lightbox img { max-width: 95vw; max-height: 95vh; }
+
+  @media (max-width: 600px) {
+    #controls { left: 8px; bottom: 20px; width: 170px; }
+    .pt-tip img { width: 260px; }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="controls">
+  <div class="legend">
+    <span class="dot" style="background:#16a34a"></span><span>Start point</span>
+    <span class="dot" style="background:#dc2626"></span><span>End / latest point</span>
+    <span class="dot" style="background:#ff9800"></span><span>Point with photo</span>
+  </div>
+  <label for="delaySelect">Transmission delay</label>
+  <select id="delaySelect">
+    <option value="1000">1 second</option>
+    <option value="2000">2 seconds</option>
+    <option value="5000">5 seconds</option>
+    <option value="10000">10 seconds</option>
+    <option value="15000">15 seconds</option>
+    <option value="30000">30 seconds</option>
+    <option value="60000">60 seconds</option>
+  </select>
+  <div id="delayStatus"></div>
+  <button id="resetBtn">Clear map</button>
+</div>
+
+<div id="lightbox"><img alt="Drone photo" /></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+  const map = L.map('map').setView([23.0580, 72.5210], 13);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(map);
+
+  const $ = id => document.getElementById(id);
+
+  // One colour per tracker so two drones' trails don't get confused.
+  const TRAIL_COLORS = ['#2563eb', '#9333ea', '#0891b2', '#db2777', '#4d7c0f'];
+
+  // ---------------------------------------------------------------
+  // ICONS
+  // ---------------------------------------------------------------
+  function pinIcon(color, letter) {
+    return L.divIcon({
+      className: 'pin-marker',
+      html: `<svg width="30" height="40" viewBox="0 0 30 40" xmlns="http://www.w3.org/2000/svg">
+               <path d="M15 1C7.3 1 1 7.2 1 14.8 1 25 15 39 15 39s14-14 14-24.2C29 7.2 22.7 1 15 1z"
+                     fill="${color}" stroke="#fff" stroke-width="2"/>
+               <text x="15" y="19.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff"
+                     font-family="system-ui, sans-serif">${letter}</text>
+             </svg>`,
+      iconSize: [30, 40],
+      iconAnchor: [15, 39]    // tip of the pin sits on the point
+    });
+  }
+  const startIcon = pinIcon('#16a34a', 'S');
+  const endIcon = pinIcon('#dc2626', 'E');
+
+  // Navigation-style arrow; rotated to the direction of travel.
+  function arrowIcon(color) {
+    return L.divIcon({
+      className: 'arrow-marker',
+      html: `<svg width="36" height="36" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+               <path d="M18 2 L31 32 L18 25 L5 32 Z" fill="${color}" stroke="#fff" stroke-width="2.5"
+                     stroke-linejoin="round"/>
+             </svg>`,
+      iconSize: [36, 36],
+      iconAnchor: [18, 18]
+    });
+  }
+
+  // Compass bearing (0 = north) from point a to point b, in degrees.
+  function bearing(a, b) {
+    const toRad = d => d * Math.PI / 180;
+    const y = Math.sin(toRad(b.lon - a.lon)) * Math.cos(toRad(b.lat));
+    const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+              Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lon - a.lon));
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  // ---------------------------------------------------------------
+  // HOVER POP-UP
+  // ---------------------------------------------------------------
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function photoUrl(p) {
+    return p.photoUrl || `/api/data?photo=${encodeURIComponent(p.photoId)}`;
+  }
+
+  function formatTime(p) {
+    if (p.timestamp) return p.timestamp;
+    return new Date(p.receivedAt).toLocaleString('en-IN', { hour12: false });
+  }
+
+  function tooltipHtml(p) {
+    // Some formats (HEIC, TIFF, camera RAW...) are stored fine but browsers
+    // can't display them; show a note instead of a broken picture.
+    const img = p.photoId
+      ? `<img src="${photoUrl(p)}" alt="Drone photo"
+             onerror="this.outerHTML='<div class=&quot;noimg&quot;>Image saved, but this format cannot be previewed in the browser.<br>Click the point to open/download it.</div>'" />`
+      : `<div class="noimg">No image for this point</div>`;
+    return `<div class="head"><b>ID</b> ${escapeHtml(p.trackerId || '--')}<br>
+            <b>Time</b> ${escapeHtml(formatTime(p))}</div>${img}`;
+  }
+
+  const TIP_OPTIONS = { className: 'pt-tip', direction: 'auto', opacity: 1, offset: [0, -6] };
+
+  // ---------------------------------------------------------------
+  // PER-TRACKER LAYERS
+  // ---------------------------------------------------------------
+  // trackerId -> { points, line, dots, start, end, arrow, color }
+  const tracks = new Map();
+
+  function getTrack(id) {
+    let t = tracks.get(id);
+    if (t) return t;
+    const color = TRAIL_COLORS[tracks.size % TRAIL_COLORS.length];
+    t = {
+      color,
+      points: [],
+      dots: [],
+      // Dashed trail.
+      line: L.polyline([], { color, weight: 4, dashArray: '10, 10', lineCap: 'butt' }).addTo(map),
+      start: null,
+      end: null,
+      arrow: null,
+    };
+
+    // Hovering anywhere on the line shows the pop-up of the nearest point.
+    let shown = null;
+    t.line.on('mousemove', e => {
+      const near = nearestDot(t, e.latlng);
+      if (near && near !== shown) {
+        if (shown) shown.closeTooltip();
+        near.openTooltip();
+        shown = near;
+      }
+    });
+    t.line.on('mouseout', () => { if (shown) shown.closeTooltip(); shown = null; });
+
+    tracks.set(id, t);
+    return t;
+  }
+
+  function nearestDot(t, latlng) {
+    const target = map.latLngToLayerPoint(latlng);
+    let best = null, bestD = Infinity;
+    for (const d of t.dots) {
+      const dist = map.latLngToLayerPoint(d.getLatLng()).distanceTo(target);
+      if (dist < bestD) { bestD = dist; best = d; }
+    }
+    return best;
+  }
+
+  function bindPointHover(layer, p) {
+    layer.bindTooltip(() => tooltipHtml(p), TIP_OPTIONS);
+    // Click a point that has a photo to see it full screen.
+    if (p.photoId) layer.on('click', () => openLightbox(photoUrl(p)));
+  }
+
+  function addPoints(newPoints) {
+    const touched = new Set();
+    for (const p of newPoints) {
+      const t = getTrack(p.trackerId || 'UNKNOWN');
+      t.points.push(p);
+      const dot = L.circleMarker([p.lat, p.lon], {
+        radius: p.photoId ? 6 : 4,
+        color: '#fff',
+        weight: 2,
+        fillColor: p.photoId ? '#ff9800' : t.color,
+        fillOpacity: 1
+      }).addTo(map);
+      bindPointHover(dot, p);
+      t.dots.push(dot);
+      touched.add(t);
+    }
+    touched.forEach(updateTrack);
+  }
+
+  function updateTrack(t) {
+    const pts = t.points;
+    if (!pts.length) return;
+    t.line.setLatLngs(pts.map(p => [p.lat, p.lon]));
+
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+
+    if (!t.start) {
+      t.start = L.marker([first.lat, first.lon], { icon: startIcon, zIndexOffset: 500 }).addTo(map);
+      bindPointHover(t.start, first);
+    }
+
+    if (pts.length > 1) {
+      if (!t.end) {
+        t.end = L.marker([last.lat, last.lon], { icon: endIcon, zIndexOffset: 600 }).addTo(map);
+      }
+      t.end.setLatLng([last.lat, last.lon]);
+      t.end.unbindTooltip();
+      bindPointHover(t.end, last);
+    }
+
+    if (!t.arrow) {
+      t.arrow = L.marker([last.lat, last.lon], { icon: arrowIcon(t.color), zIndexOffset: 1000 }).addTo(map);
+    }
+    t.arrow.setLatLng([last.lat, last.lon]);
+    t.arrow.unbindTooltip();
+    bindPointHover(t.arrow, last);
+
+    // Point the arrow along the last movement (skip repeated positions).
+    for (let i = pts.length - 2; i >= 0; i--) {
+      if (pts[i].lat !== last.lat || pts[i].lon !== last.lon) {
+        const svg = t.arrow.getElement() && t.arrow.getElement().querySelector('svg');
+        if (svg) svg.style.transform = `rotate(${bearing(pts[i], last)}deg)`;
+        break;
+      }
+    }
+  }
+
+  function clearMap() {
+    tracks.forEach(t => {
+      [t.line, t.start, t.end, t.arrow, ...t.dots].forEach(l => l && map.removeLayer(l));
+    });
+    tracks.clear();
+    lastSeq = 0;
+    hasFramed = false;
+  }
+
+  function openLightbox(url) {
+    const img = $('lightbox').querySelector('img');
+    // Formats the browser can't show are opened in a new tab (downloads them).
+    img.onerror = () => { $('lightbox').style.display = 'none'; window.open(url, '_blank'); };
+    img.src = url;
+    $('lightbox').style.display = 'flex';
+  }
+  $('lightbox').addEventListener('click', () => { $('lightbox').style.display = 'none'; });
+
+  // ---------------------------------------------------------------
+  // POLLING
+  // ---------------------------------------------------------------
+  // A tiny status request every second; the trail is only re-fetched when
+  // something new has arrived, so new data appears within ~1 s of the drone
+  // sending it, at whatever delay is selected.
+  let lastSeq = 0;
+  let generation = null;   // changes when the server is reset/restarted
+  let hasFramed = false;
+  let polling = false;
+
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      // One request: only points newer than the ones already drawn.
+      const st = await (await fetch(`/api/data?since=${lastSeq}`, { cache: 'no-store' })).json();
+
+      if (st.generation !== generation) {
+        const firstLoad = generation === null;
+        generation = st.generation;
+        if (!firstLoad) {
+          // Server restarted or data was cleared elsewhere: start over and
+          // fetch everything from scratch on the next poll.
+          clearMap();
+          return;
+        }
+      }
+
+      if (document.activeElement !== delaySelect) {
+        ensureOption(st.intervalMs);
+        delaySelect.value = String(st.intervalMs);
+      }
+
+      if (st.seq > lastSeq) {
+        const newPoints = st.points;
+        lastSeq = st.seq;
+        if (newPoints.length) {
+          addPoints(newPoints);
+          const latest = newPoints[newPoints.length - 1];
+          const all = [];
+          tracks.forEach(t => t.points.forEach(p => all.push([p.lat, p.lon])));
+          if (!hasFramed) {
+            map.fitBounds(all, { maxZoom: 16, padding: [60, 60] });
+            hasFramed = true;
+          } else if (!map.getBounds().contains([latest.lat, latest.lon])) {
+            // Only follow the drone when it leaves the visible area, so the
+            // map doesn't jump while you're hovering over a point.
+            map.panTo([latest.lat, latest.lon]);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Poll failed:', e);
+    } finally {
+      polling = false;
+    }
+  }
+
+  // Dashboard settings need the admin key when the server has ADMIN_API_KEY set.
+  // It is asked for once and remembered in this browser only.
+  const ADMIN_KEY_STORAGE = 'droneTagAdminKey';
+  function storedAdminKey() {
+    try { return localStorage.getItem(ADMIN_KEY_STORAGE) || ''; } catch (e) { return ''; }
+  }
+  async function postSetting(body) {
+    const send = key => fetch('/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(key ? { 'X-Admin-Key': key } : {}) },
+      body: JSON.stringify(body)
+    });
+    let res = await send(storedAdminKey());
+    if (res.status === 401) {
+      const key = prompt('Enter the admin key to change settings:');
+      if (!key) return res;
+      res = await send(key);
+      if (res.ok) { try { localStorage.setItem(ADMIN_KEY_STORAGE, key); } catch (e) { /* not stored */ } }
+    }
+    return res;
+  }
+
+  $('resetBtn').addEventListener('click', async () => {
+    if (!confirm('Clear all points and photos from the map?')) return;
+    const res = await postSetting({ action: 'reset' });
+    if (res.ok) clearMap();
+    else alert('Not cleared: ' + ((await res.json().catch(() => ({}))).message || res.status));
+  });
+
+  // ---------------------------------------------------------------
+  // DELAY CONFIG — read from GET /api/data, changed via POST /api/data
+  // ---------------------------------------------------------------
+  const delaySelect = $('delaySelect');
+  const delayStatus = $('delayStatus');
+
+  function ensureOption(ms) {
+    const exists = Array.from(delaySelect.options).some(o => Number(o.value) === ms);
+    if (!exists) {
+      const opt = document.createElement('option');
+      opt.value = ms;
+      opt.textContent = `${ms / 1000}s (custom)`;
+      delaySelect.appendChild(opt);
+    }
+  }
+
+  delaySelect.addEventListener('change', async () => {
+    const newMs = Number(delaySelect.value);
+    delayStatus.textContent = 'Updating...';
+    delayStatus.className = '';
+    try {
+      const res = await postSetting({ intervalMs: newMs });
+      const result = await res.json();
+      if (res.ok) {
+        delayStatus.textContent = `Set to ${newMs / 1000}s`;
+        delayStatus.className = 'ok';
+      } else {
+        delayStatus.textContent = result.message || 'Update failed';
+        delayStatus.className = 'err';
+      }
+    } catch (e) {
+      delayStatus.textContent = 'Network error';
+      delayStatus.className = 'err';
+    }
+    delaySelect.blur();
+  });
+
+  poll();
+  setInterval(poll, 1000);
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Render Blueprint for the Drone Tag server (temporary test hosting; the final
+# home is the Hostinger VPS). Used by "New > Blueprint"; an existing web service
+# that already points at this repo keeps its own dashboard settings.
+# See RENDER_DEPLOYMENT.md.
+services:
+  - type: web
+    name: tracker-drone
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Secrets: Render asks for these values; they are never stored in the repo.
+      - key: DEVICE_API_KEY
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
