@@ -1,6 +1,6 @@
 {
   "name": "drone-tracker-server",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Drone Tag server: receives GPS positions, telemetry, photos and configuration files from drones and trackers, and shows them live on a map",
   "main": "server.js",
   "scripts": {

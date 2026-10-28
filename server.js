@@ -22,14 +22,9 @@ const PORT = process.env.PORT || 3000;
 // (default ./uploads) and returned exactly as they were uploaded. The
 // dashboard is served from "/".
 //
-// Access keys (environment variables; never put them in the code):
-//   DEVICE_API_KEY  required on device uploads (header X-Device-Key)
-//   ADMIN_API_KEY   required for dashboard settings: delay and reset (header X-Admin-Key)
-// When a key is not set, that check is off (local testing only).
+// No access keys: devices send data and the dashboard changes settings without
+// any key (project decision).
 // =====================================================================
-
-const DEVICE_API_KEY = (process.env.DEVICE_API_KEY || '').trim();
-const ADMIN_API_KEY = (process.env.ADMIN_API_KEY || '').trim();
 
 // ---------------------------------------------------------------------
 // DELAY CONFIG (persisted to disk so it survives a server restart)
@@ -308,45 +303,6 @@ function pick(data, ...keys) {
   return undefined;
 }
 
-// ---------------------------------------------------------------------
-// ACCESS KEYS
-// ---------------------------------------------------------------------
-// Compared in constant time; the keys themselves are never logged.
-function keyMatches(provided, expected) {
-  if (!expected || typeof provided !== 'string' || provided === '') return false;
-  const a = crypto.createHash('sha256').update(provided).digest();
-  const b = crypto.createHash('sha256').update(expected).digest();
-  return crypto.timingSafeEqual(a, b);
-}
-
-// Devices send the key in the X-Device-Key header. Modems that cannot set
-// headers may add ?key=... to the URL instead.
-function deviceKeyOf(req) {
-  return req.get('x-device-key') || (typeof req.query.key === 'string' ? req.query.key : '');
-}
-
-function isAdmin(req) {
-  return !ADMIN_API_KEY || keyMatches(req.get('x-admin-key'), ADMIN_API_KEY);
-}
-
-// Admins may also send device data.
-function isDevice(req) {
-  if (!DEVICE_API_KEY) return true;
-  return keyMatches(deviceKeyOf(req), DEVICE_API_KEY) ||
-    (ADMIN_API_KEY !== '' && keyMatches(req.get('x-admin-key'), ADMIN_API_KEY));
-}
-
-function unauthorized(res, what) {
-  return res.status(401).json({ status: 'error', message: `missing or invalid ${what}` });
-}
-
-// Rejects device requests without a valid key before their body is read.
-function requireDeviceKey(req, res, next) {
-  if (isDevice(req)) return next();
-  console.warn(`[${new Date().toISOString()}] 401 ${req.method} ${req.path}: missing or invalid device key`);
-  return unauthorized(res, 'device key (X-Device-Key header)');
-}
-
 // Stores one report from a device. `image` is { buffer, mime, originalName } or null.
 function storeReport(data, image) {
   const receivedAt = new Date().toISOString();
@@ -405,11 +361,7 @@ function storeReport(data, image) {
 }
 
 // Handles { "intervalMs": ... } and { "action": "reset" } from the dashboard.
-function handleSetting(data, req, res) {
-  if (!isAdmin(req)) {
-    console.warn(`[${new Date().toISOString()}] 401 dashboard setting: missing or invalid admin key`);
-    return unauthorized(res, 'admin key (X-Admin-Key header)');
-  }
+function handleSetting(data, res) {
   if (data.action !== undefined) {
     if (data.action !== 'reset') {
       return res.status(400).json({ status: 'error', message: 'unknown action (only "reset" is supported)' });
@@ -466,7 +418,7 @@ function readBody(req, res, next) {
   return express.raw({ type: () => true, limit: MAX_IMAGE_BYTES })(req, res, next);
 }
 
-app.post('/api/data', requireDeviceKey, readBody, (req, res) => {
+app.post('/api/data', readBody, (req, res) => {
   // ---- A) form-data ----
   if (req.is('multipart/form-data')) {
     const fields = req.body || {};
@@ -479,7 +431,7 @@ app.post('/api/data', requireDeviceKey, readBody, (req, res) => {
       }
       image = { buffer: file.buffer, mime, originalName: file.originalname };
     } else if (fields.intervalMs !== undefined || fields.action !== undefined) {
-      return handleSetting(fields, req, res);
+      return handleSetting(fields, res);
     }
     const result = storeReport(fields, image);
     if (result.error) return res.status(400).json({ status: 'error', message: result.error });
@@ -513,7 +465,7 @@ app.post('/api/data', requireDeviceKey, readBody, (req, res) => {
     const hasCoords = pick(data, 'Latitude', 'latitude', 'lat') !== undefined ||
                       pick(data, 'Longitude', 'longitude', 'lon', 'lng') !== undefined;
     if (!hasCoords && (data.intervalMs !== undefined || data.action !== undefined)) {
-      return handleSetting(data, req, res);
+      return handleSetting(data, res);
     }
     const result = storeReport(data, null);
     if (result.error) return res.status(400).json({ status: 'error', message: result.error });
@@ -615,7 +567,6 @@ app.get('/health', (req, res) => {
     message: 'Drone Tag API is running',
     startedAt,
     serverTime: new Date().toISOString(),
-    deviceKeyRequired: DEVICE_API_KEY !== '',
   });
 });
 
@@ -734,7 +685,7 @@ function validateTelemetry(data) {
   return { errors, record, ignored };
 }
 
-app.post('/api/telemetry', requireDeviceKey, express.json({ limit: MAX_JSON_BYTES, strict: true }), (req, res) => {
+app.post('/api/telemetry', express.json({ limit: MAX_JSON_BYTES, strict: true }), (req, res) => {
   const data = req.body;
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return res.status(400).json({ status: 'error', message: 'send a JSON object with Content-Type: application/json' });
@@ -838,7 +789,7 @@ function checkConfigFile(buffer, ext) {
   return null;
 }
 
-app.post('/api/config', requireDeviceKey, readConfigBody, (req, res) => {
+app.post('/api/config', readConfigBody, (req, res) => {
   let fields;
   let buffer;
   let originalName;
@@ -898,8 +849,7 @@ function configUrl(c) {
 
 //   GET /api/config/<TrackerId>               list that tracker's configuration files
 //   GET /api/config/<TrackerId>?file=<id>     download one (?file=latest for the newest)
-// Configuration files can hold sensitive settings, so reading them needs the device key too.
-app.get('/api/config/:trackerId', requireDeviceKey, (req, res) => {
+app.get('/api/config/:trackerId', (req, res) => {
   const mine = configs.filter(c => sameTracker(c.trackerId, req.params.trackerId));
   if (req.query.file !== undefined) {
     const id = String(req.query.file);
@@ -964,8 +914,6 @@ function start(port = PORT) {
     console.log(`Dashboard: http://localhost:${port}   Health: http://localhost:${port}/health`);
     console.log(`Data is saved in: ${UPLOAD_DIR}`);
     console.log(`Current tracker delay: ${config.intervalMs} ms`);
-    if (!DEVICE_API_KEY) console.warn('WARNING: DEVICE_API_KEY is not set - anyone can send data. Set it on any public server.');
-    if (!ADMIN_API_KEY) console.warn('WARNING: ADMIN_API_KEY is not set - anyone can change the delay or clear all data.');
   });
 }
 

@@ -353,26 +353,13 @@
     }
   }
 
-  // Dashboard settings need the admin key when the server has ADMIN_API_KEY set.
-  // It is asked for once and remembered in this browser only.
-  const ADMIN_KEY_STORAGE = 'droneTagAdminKey';
-  function storedAdminKey() {
-    try { return localStorage.getItem(ADMIN_KEY_STORAGE) || ''; } catch (e) { return ''; }
-  }
-  async function postSetting(body) {
-    const send = key => fetch('/api/data', {
+  // Dashboard settings (delay, clear map): POST /api/data, no key needed.
+  function postSetting(body) {
+    return fetch('/api/data', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(key ? { 'X-Admin-Key': key } : {}) },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    let res = await send(storedAdminKey());
-    if (res.status === 401) {
-      const key = prompt('Enter the admin key to change settings:');
-      if (!key) return res;
-      res = await send(key);
-      if (res.ok) { try { localStorage.setItem(ADMIN_KEY_STORAGE, key); } catch (e) { /* not stored */ } }
-    }
-    return res;
   }
 
   $('resetBtn').addEventListener('click', async () => {

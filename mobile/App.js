@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 
 // The Drone Tag server that the trackers post to. Set EXPO_PUBLIC_DRONE_API_BASE_URL
 // in mobile/.env to change it (no trailing slash); the Render test service is the default.
-const SERVER_BASE = (process.env.EXPO_PUBLIC_DRONE_API_BASE_URL || 'https://tracker-drone.onrender.com').replace(/\/+$/, '');
+const SERVER_BASE = (process.env.EXPO_PUBLIC_DRONE_API_BASE_URL || 'https://drone-tag-hixr.onrender.com').replace(/\/+$/, '');
 
 // The app checks GET /api/data every second and only redraws
 // when something new has arrived, so data shows up at whatever delay is

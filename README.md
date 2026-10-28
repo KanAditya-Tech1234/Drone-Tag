@@ -55,12 +55,12 @@ drone-tracker-updated/
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Is the service running? (Render health check) |
-| `POST /api/data` | **Send data.** A JSON position (`TrackerId`, `Latitude`, `Longitude`, optional `Altitude`, `Timestamp`); **or form-data** with those text fields plus a file field `image`; **or** the raw image file as the body with `?trackerId=&lat=&lon=&alt=&ts=` in the URL; or a dashboard setting: `{"intervalMs":10000}` / `{"action":"reset"}` (admin key). Any image format; max 15 MB. The reply always includes `intervalMs`. |
+| `POST /api/data` | **Send data.** A JSON position (`TrackerId`, `Latitude`, `Longitude`, optional `Altitude`, `Timestamp`); **or form-data** with those text fields plus a file field `image`; **or** the raw image file as the body with `?trackerId=&lat=&lon=&alt=&ts=` in the URL; or a dashboard setting: `{"intervalMs":10000}` / `{"action":"reset"}`. Any image format; max 15 MB. The reply always includes `intervalMs`. |
 | `GET /api/data/<TrackerId>` | **Read data** of one tracker, e.g. `/api/data/CAM-01`: delay, latest point, all its points and all its images (`photos`). `?since=<seq>` returns only newer points; `?photo=<photoId>` or `?photo=latest` returns the image file itself, exactly as uploaded. Without a TrackerId (`/api/data`) it returns all trackers together, which the live map uses. |
 | `POST /api/telemetry` · `GET /api/telemetry/<TrackerId>` | Send / read telemetry: battery, flight and spray status, tank, flow, speed, heading, satellites, signal. |
 | `POST /api/config` · `GET /api/config/<TrackerId>` | Upload / list / download text configuration files (max 1 MB). |
 
-Uploads need the device key (`X-Device-Key` header) and dashboard settings need the admin key (`X-Admin-Key`) when `DEVICE_API_KEY` / `ADMIN_API_KEY` are set; see `.env.example`.
+No access keys: devices send data and the dashboard changes settings without any key (project decision). Anyone with the URL can do the same.
 
 - Drone team: [DRONE_TEAM_API_GUIDE.md](DRONE_TEAM_API_GUIDE.md)
 - Deployment: [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md)
@@ -90,9 +90,8 @@ Uploads need the device key (`X-Device-Key` header) and dashboard settings need 
 
 Follow [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md): push the files to the
 repository connected to the `tracker-drone` service, set the health check path
-to `/health`, and add `DEVICE_API_KEY` / `ADMIN_API_KEY` in the service's
-Environment tab. The sketches below do not send the device key yet; add the
-`X-Device-Key` header (or `?key=`) to them before switching the key on.
+to `/health`. No access keys are needed; point the sketches below at the
+service URL.
 
 ### Step 2: Prepare the Waveshare ESP32-S3-SIM7670G board
 

@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Drone Tag API",
-    "description": "Drone Tag server (temporary Render test service). Set the environment values first: baseUrl, deviceKey, adminKey, trackerId.\nAll values sent are synthetic TEST DATA. See DRONE_TEAM_API_GUIDE.md.",
+    "description": "Drone Tag server (temporary Render test service). Set the environment values first: baseUrl, trackerId. No access keys are needed.\nAll values sent are synthetic TEST DATA. See DRONE_TEAM_API_GUIDE.md.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -36,10 +36,6 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              },
-              {
                 "key": "Content-Type",
                 "value": "application/json"
               }
@@ -70,12 +66,7 @@
           "name": "Send position + image (form-data)",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              }
-            ],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/data",
               "host": [
@@ -129,10 +120,6 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "image/jpeg"
@@ -207,10 +194,6 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -304,12 +287,7 @@
           ],
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              }
-            ],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/config",
               "host": [
@@ -349,10 +327,6 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              },
-              {
                 "key": "Content-Type",
                 "value": "text/plain"
               }
@@ -388,12 +362,7 @@
           "name": "List configuration files",
           "request": {
             "method": "GET",
-            "header": [
-              {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              }
-            ],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/config/{{trackerId}}",
               "host": [
@@ -412,12 +381,7 @@
           "name": "Download a configuration file",
           "request": {
             "method": "GET",
-            "header": [
-              {
-                "key": "X-Device-Key",
-                "value": "{{deviceKey}}"
-              }
-            ],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/config/{{trackerId}}?file={{configId}}",
               "host": [
@@ -508,17 +472,13 @@
       ]
     },
     {
-      "name": "5. Dashboard settings (admin key)",
+      "name": "5. Dashboard settings",
       "item": [
         {
           "name": "Set the transmission delay",
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "X-Admin-Key",
-                "value": "{{adminKey}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"

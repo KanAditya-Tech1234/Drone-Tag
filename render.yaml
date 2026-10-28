@@ -14,8 +14,3 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # Secrets: Render asks for these values; they are never stored in the repo.
-      - key: DEVICE_API_KEY
-        sync: false
-      - key: ADMIN_API_KEY
-        sync: false

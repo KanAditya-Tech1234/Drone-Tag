@@ -1,8 +1,7 @@
 # Drone Tracker API: only two endpoints
 
 > **Superseded by [DRONE_TEAM_API_GUIDE.md](DRONE_TEAM_API_GUIDE.md)** (v1.1.0: health check, telemetry,
-> configuration files, device key). The `POST /api/data` / `GET /api/data` contract below is unchanged, except that
-> uploads need the `X-Device-Key` header once the server has `DEVICE_API_KEY` set.
+> configuration files). The `POST /api/data` / `GET /api/data` contract below is unchanged. No access key is needed.
 
 | # | Method | URL (local testing) | Purpose |
 |---|---|---|---|
