@@ -98,11 +98,56 @@
     L.control.layers({ 'Street map': street, Satellite: satellite }, null, { position: 'topright' }).addTo(map);
   }
 
+  // Map markers: green pin = start, red pin = end, arrow = live position.
+  const PIN_COLORS = { start: '#16a34a', end: '#dc2626' };
+  const pinSvg = (color, size = 30) => `
+    <svg width="${size}" height="${Math.round(size * 4 / 3)}" viewBox="0 0 30 40" aria-hidden="true">
+      <path d="M15 38.5S27.5 23.6 27.5 14a12.5 12.5 0 0 0-25 0c0 9.6 12.5 24.5 12.5 24.5z" fill="${color}" stroke="#fff" stroke-width="2.5"/>
+      <circle cx="15" cy="14" r="5" fill="#fff"/>
+    </svg>`;
+  const arrowSvg = (size = 34) => `
+    <svg width="${size}" height="${size}" viewBox="0 0 34 34" aria-hidden="true">
+      <path d="M17 2.5 30 31 17 24.2 4 31z" fill="#0b3d2e" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/>
+    </svg>`;
+  const markers = {
+    start: () => L.divIcon({ className: 'map-pin', html: pinSvg(PIN_COLORS.start), iconSize: [30, 40], iconAnchor: [15, 39], popupAnchor: [0, -36] }),
+    end: () => L.divIcon({ className: 'map-pin', html: pinSvg(PIN_COLORS.end), iconSize: [30, 40], iconAnchor: [15, 39], popupAnchor: [0, -36] }),
+    // headingDeg: 0 = north, clockwise; null shows the arrow pointing north.
+    arrow: headingDeg => L.divIcon({
+      className: 'map-arrow',
+      html: `<div class="arrow-halo"></div><div class="arrow-body" style="transform:rotate(${Math.round(headingDeg || 0)}deg)">${arrowSvg()}</div>`,
+      iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -16],
+    }),
+  };
+
+  // Legend in the bottom-left corner of a map. kinds: any of 'start', 'live', 'end'.
+  function legend(map, kinds) {
+    const rows = {
+      start: [pinSvg(PIN_COLORS.start, 15), 'Start point'],
+      end: [pinSvg(PIN_COLORS.end, 15), 'End point'],
+      live: [arrowSvg(17), 'Current live drone position'],
+    };
+    const control = L.control({ position: 'bottomleft' });
+    control.onAdd = () => {
+      const box = L.DomUtil.create('div', 'map-legend');
+      box.innerHTML = '<b>Legend</b>' + kinds.map(k => `<div class="legend-row"><span class="legend-icon">${rows[k][0]}</span>${rows[k][1]}</div>`).join('');
+      L.DomEvent.disableClickPropagation(box);
+      return box;
+    };
+    control.addTo(map);
+    return control;
+  }
+
+  // Popup text on the maps: only the Tracker ID and the date-time (IST).
+  function mapPopup(trackerId, iso, extraHtml = '') {
+    return `<div class="map-pop"><b>Tracker ID:</b> ${esc(trackerId)}<br><span class="when"><b>Date &amp; time:</b> ${ist(iso)}</span>${extraHtml}</div>`;
+  }
+
   // A redirect target from ?next=, only to a page on this site.
   function safeNext(fallback = '/') {
     const next = new URLSearchParams(location.search).get('next') || '';
     return next.startsWith('/') && !next.startsWith('//') ? next : fallback;
   }
 
-  window.DT = { ist, esc, api, setStatus, header, baseLayers, safeNext };
+  window.DT = { ist, esc, api, setStatus, header, baseLayers, markers, legend, mapPopup, safeNext };
 })();

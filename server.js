@@ -295,6 +295,26 @@ function formatAltitude(alt) {
   return /^-?\d+(\.\d+)?$/.test(String(alt)) ? `${alt}m` : String(alt);
 }
 
+// ---------------------------------------------------------------------
+// TRACKING SESSIONS (see lib/sessions.js)
+// ---------------------------------------------------------------------
+// The tags send no power-off message, so a flight counts as ended after this
+// much silence: OFFLINE_AFTER_SECONDS (default 120), but never less than three
+// transmission intervals, so a single missed upload does not end a flight.
+const { buildSessions } = require('./lib/sessions');
+const OFFLINE_AFTER_MS = Math.max(10, Number(process.env.OFFLINE_AFTER_SECONDS) || 120) * 1000;
+
+function offlineAfterMs() {
+  return Math.max(OFFLINE_AFTER_MS, 3 * config.intervalMs);
+}
+
+function sessionsOf(trackerId, points) {
+  return buildSessions(points, {
+    offlineAfterMs: offlineAfterMs(),
+    telemetry: telemetry.filter(r => sameTracker(r.trackerId, trackerId)),
+  });
+}
+
 // Picks a value from the request using any of the accepted key spellings.
 function pick(data, ...keys) {
   for (const k of keys) {
@@ -311,7 +331,8 @@ function storeReport(data, image) {
   const lon = parseCoord(pick(data, 'Longitude', 'longitude', 'lon', 'lng'));
   const altitude = formatAltitude(pick(data, 'Altitude', 'altitude', 'alt'));
   const timestamp = pick(data, 'Timestamp', 'timestamp', 'ts', 'time') || null;
-  const hasFix = !Number.isNaN(lat) && !Number.isNaN(lon) && !(lat === 0 && lon === 0);
+  const hasFix = !Number.isNaN(lat) && !Number.isNaN(lon) && !(lat === 0 && lon === 0) &&
+    lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 
   if (!image && !hasFix) {
     return { error: 'invalid or missing coordinates (Latitude/Longitude)' };
@@ -662,7 +683,20 @@ app.get('/api/data/:trackerId?', (req, res) => {
   const points = Number.isFinite(since) ? myPoints.filter(p => p.seq > since) : myPoints;
   const latest = myPoints[myPoints.length - 1] || null;
 
+  // Tracking sessions: for one tracker all of them; for all trackers the latest one each.
+  const extra = { offlineAfterMs: offlineAfterMs() };
+  if (trackerId !== undefined) {
+    extra.sessions = sessionsOf(trackerId, myPoints);
+    extra.session = extra.sessions[extra.sessions.length - 1] || null;
+  } else {
+    extra.trackerStatus = trackerList().map(id => {
+      const list = sessionsOf(id, history.filter(p => sameTracker(p.trackerId, id)));
+      return { trackerId: id, session: list[list.length - 1] || null };
+    });
+  }
+
   res.set('Cache-Control', 'no-store').json({
+    ...extra,
     status: 'ok',
     trackerId: trackerId === undefined ? null : (latest || myPhotos[0]).trackerId,
     trackers: trackerList(),

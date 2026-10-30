@@ -11,23 +11,23 @@
 <body>
 <div id="app-header"></div>
 <main class="page stack">
+  <div class="page-head">
+    <div><h1>Drone dashboard</h1><p class="muted">Flight path, live position and images of one drone. Times are Indian Standard Time.</p></div>
+    <div class="chips"><span class="chip hidden" id="track-chip"></span><span class="chip alt" id="updated">–</span></div>
+  </div>
+
   <section class="card">
-    <form class="row" id="search-form">
+    <form class="actions" id="search-form">
       <label class="field grow">Tracker ID <input id="tracker" placeholder="Enter a Tracker ID, e.g. DRONE-01" autocapitalize="characters"></label>
-      <div class="row" style="align-self:flex-end">
-        <button class="btn btn-primary" type="submit" id="fetch-btn">Show drone</button>
-        <button class="btn btn-accent" type="button" id="csv-btn">Export CSV</button>
-        <button class="btn btn-outline" type="button" id="zip-btn">Export images</button>
-      </div>
+      <button class="btn btn-primary" type="submit" id="fetch-btn">Show drone</button>
+      <button class="btn btn-accent" type="button" id="csv-btn">Export CSV</button>
+      <button class="btn btn-outline" type="button" id="zip-btn">Export images</button>
     </form>
-    <div id="status" class="hidden" style="margin-top:10px"></div>
+    <div id="status" class="hidden" style="margin-top:12px"></div>
   </section>
 
   <section class="card">
-    <div class="row" style="margin-bottom:10px">
-      <h2 class="section-title grow" style="margin:0">Drone details</h2>
-      <span class="chip alt" id="updated">–</span>
-    </div>
+    <h2 class="section-title">Drone details</h2>
     <div class="table-wrap">
       <table class="info">
         <thead><tr><th>Tracker ID</th><th>Drone UIN</th><th>Category</th><th>Application</th><th>Autonomy</th><th>Range</th><th>Owner</th></tr></thead>
@@ -37,10 +37,16 @@
     <div class="chips" id="stats" style="margin-top:12px"></div>
   </section>
 
-  <div id="map" class="map"></div>
+  <section class="stack" style="gap:10px">
+    <div class="page-head">
+      <div><h2 class="section-title" style="margin:0">Flight path</h2><p class="muted" id="track-note" style="font-size:13.5px"></p></div>
+      <label class="field" style="min-width:min(100%,320px)">Flight <select id="session"><option value="">Latest flight</option></select></label>
+    </div>
+    <div id="map" class="map"></div>
+  </section>
 
   <section>
-    <div class="row"><h2 class="section-title grow">Images</h2><span class="muted" id="img-count"></span></div>
+    <div class="page-head" style="margin-bottom:10px"><h2 class="section-title" style="margin:0">Images</h2><span class="muted" id="img-count"></span></div>
     <div id="images" class="images-grid"><div class="empty">Images of the drone appear here.</div></div>
   </section>
 </main>
@@ -57,17 +63,43 @@
 (async () => {
   const me = await DT.header('drone');
   const $ = id => document.getElementById(id);
+  const REFRESH_MS = 5000;
+
+  // ---- map: one path line and at most one start pin, one arrow and one end pin ----
   const map = L.map('map').setView([22.6, 72.5], 7);
   DT.baseLayers(map);
-  const pathLayer = L.layerGroup().addTo(map);
-  const badge = (cls, text) => L.divIcon({ className: '', html: `<div class="end-badge ${cls}">${text}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+  DT.legend(map, ['start', 'live', 'end']);
+  const pathLine = L.polyline([], { color: '#b45309', weight: 4, opacity: 0.9 }).addTo(map);
+  const dots = L.layerGroup().addTo(map);
+  const marks = { start: null, arrow: null, end: null };
+  let arrowDeg = null;
+  let dotsKey = '';
+  let fittedFor = '';
+
+  // Creates the marker the first time, afterwards only moves it (no duplicates).
+  function place(kind, pos, icon, html) {
+    const ll = [pos.lat, pos.lon];
+    if (!marks[kind]) marks[kind] = L.marker(ll, { icon, zIndexOffset: kind === 'arrow' ? 1000 : 0 }).addTo(map).bindPopup(html);
+    else { marks[kind].setLatLng(ll); marks[kind].setPopupContent(html); }
+    return marks[kind];
+  }
+  function drop(kind) {
+    if (marks[kind]) { map.removeLayer(marks[kind]); marks[kind] = null; }
+    if (kind === 'arrow') arrowDeg = null;
+  }
+  function clearTrack() {
+    ['start', 'arrow', 'end'].forEach(drop);
+    pathLine.setLatLngs([]);
+    dots.clearLayers();
+    dotsKey = '';
+  }
+
+  const validFix = p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
+  const duration = ms => ms < 120000 ? `${Math.round(ms / 1000)} seconds` : `${Math.round(ms / 6000) / 10} minutes`;
 
   let current = '';
-  let lastKey = '';
-  let timer = null;
-
-  // Only the Tracker ID and the date-time (IST) on the map.
-  const popup = (id, iso) => `<div class="map-pop"><b>Tracker ID:</b> ${DT.esc(id)}<br><span class="when"><b>Date &amp; time:</b> ${DT.ist(iso)}</span></div>`;
+  let chosen = '';            // '' = always follow the latest flight
+  let photosKey = '';
 
   function renderInfo(id, drone) {
     const cell = v => `<td>${v ? DT.esc(v) : '<span class="muted">–</span>'}</td>`;
@@ -76,21 +108,71 @@
       : `<tr>${cell(id)}<td colspan="6" class="muted">This Tracker ID is not registered by any user (data is still shown).</td></tr>`;
   }
 
-  function renderMap(id, points, fit) {
-    pathLayer.clearLayers();
-    if (!points.length) return;
-    const coords = points.map(p => [p.lat, p.lon]);
-    L.polyline(coords, { color: '#b45309', weight: 4, opacity: 0.9 }).addTo(pathLayer);
-    points.forEach((p, i) => {
-      if (i === 0 || i === points.length - 1) return;
-      L.circleMarker([p.lat, p.lon], { radius: 4, color: '#fff', weight: 1.5, fillColor: '#15803d', fillOpacity: 1 })
-        .addTo(pathLayer).bindPopup(popup(id, p.receivedAt));
-    });
-    const first = points[0];
-    const last = points[points.length - 1];
-    L.marker([first.lat, first.lon], { icon: badge('start', 'S') }).addTo(pathLayer).bindPopup(popup(id, first.receivedAt));
-    if (points.length > 1) L.marker([last.lat, last.lon], { icon: badge('end', 'E') }).addTo(pathLayer).bindPopup(popup(id, last.receivedAt));
-    if (fit) map.fitBounds(L.latLngBounds(coords), { padding: [40, 40], maxZoom: 17 });
+  function fillSessions(sessions) {
+    const label = s => `Flight ${s.number} · ${DT.ist(s.startedAt).slice(0, 16)}` +
+      (s.status === 'live' ? ' → live now' : ` → ${DT.ist(s.endedAt).slice(11, 16)}`);
+    const html = '<option value="">Latest flight</option>' +
+      sessions.slice().reverse().map(s => `<option value="${DT.esc(s.id)}">${DT.esc(label(s))}</option>`).join('');
+    if ($('session').innerHTML !== html) {
+      $('session').innerHTML = html;
+      $('session').value = sessions.some(s => s.id === chosen) ? chosen : '';
+    }
+  }
+
+  function renderTrack(id, body) {
+    const sessions = body.sessions || [];
+    fillSessions(sessions);
+    const s = sessions.find(x => x.id === chosen) || sessions[sessions.length - 1];
+    const chip = $('track-chip');
+    if (!s) {
+      clearTrack();
+      chip.className = 'chip hidden';
+      $('track-note').textContent = 'No GPS position received from this drone yet.';
+      return null;
+    }
+
+    // This flight's points only, so an older flight never mixes into the current one.
+    const pts = (body.points || []).filter(p => p.seq >= s.firstSeq && p.seq <= s.lastSeq && validFix(p));
+    pathLine.setLatLngs(pts.map(p => [p.lat, p.lon]));
+    const key = `${s.id}|${pts.length}`;
+    if (key !== dotsKey) {
+      dots.clearLayers();
+      pts.slice(1, -1).forEach(p => {
+        L.circleMarker([p.lat, p.lon], { radius: 3.5, color: '#b45309', weight: 1.5, fillColor: '#fff', fillOpacity: 1 })
+          .addTo(dots).bindPopup(DT.mapPopup(id, p.receivedAt));
+      });
+      dotsKey = key;
+    }
+
+    // Green start pin: the first position of the flight, never moves.
+    place('start', s.start, DT.markers.start(), DT.mapPopup(id, s.start.receivedAt));
+
+    if (s.status === 'live') {
+      // Live: arrow at the latest position; no red end pin yet.
+      drop('end');
+      const deg = s.headingDeg == null ? 0 : s.headingDeg;
+      const arrow = place('arrow', s.current, DT.markers.arrow(deg), DT.mapPopup(id, s.current.receivedAt));
+      if (deg !== arrowDeg) { arrow.setIcon(DT.markers.arrow(deg)); arrowDeg = deg; }
+      if (fittedFor === s.id && !map.getBounds().contains(arrow.getLatLng())) map.panTo(arrow.getLatLng(), { animate: false });
+      chip.className = 'chip live';
+      chip.textContent = 'Live · tracking';
+      $('track-note').textContent = `Flight ${s.number} is live. Last position ${DT.ist(s.lastSeenAt)}. ` +
+        `It is marked as ended if no data arrives by ${DT.ist(s.offlineAt).slice(11)}.`;
+    } else {
+      // Ended: red pin fixed at the last position received.
+      drop('arrow');
+      place('end', s.end, DT.markers.end(), DT.mapPopup(id, s.end.receivedAt));
+      chip.className = 'chip ended';
+      chip.textContent = 'Tracking ended';
+      $('track-note').textContent = `Flight ${s.number} ended. Last position ${DT.ist(s.endedAt)}. ` +
+        `A flight ends when no data arrives for ${duration(body.offlineAfterMs)}.`;
+    }
+
+    if (fittedFor !== s.id && pts.length) {
+      map.fitBounds(L.latLngBounds(pts.map(p => [p.lat, p.lon])), { padding: [50, 50], maxZoom: 17 });
+      fittedFor = s.id;
+    }
+    return { s, pts };
   }
 
   function renderImages(id, photos) {
@@ -108,41 +190,48 @@
   async function load(id, { quiet = false } = {}) {
     id = id.trim();
     if (!id) { DT.setStatus($('status'), 'Enter a Tracker ID.', 'warn'); return; }
-    const changed = id.toLowerCase() !== current.toLowerCase();
+    if (id.toLowerCase() !== current.toLowerCase()) {
+      clearTrack();
+      fittedFor = '';
+      chosen = '';
+      photosKey = '';
+    }
     current = id;
     if (!quiet) DT.setStatus($('status'), `Loading ${id}…`, 'info');
     history.replaceState(null, '', '/drone?tracker=' + encodeURIComponent(id));
 
     const [dataRes, regRes] = await Promise.all([DT.api('/api/data/' + encodeURIComponent(id)), DT.api('/api/drones')]);
+    if (id !== current) return;   // another drone was chosen meanwhile
     const drone = regRes.ok ? regRes.body.drones.find(d => d.trackerId.toLowerCase() === id.toLowerCase()) : null;
     renderInfo(id, drone);
 
     if (!dataRes.ok) {
-      renderMap(id, [], false);
+      clearTrack();
+      fillSessions([]);
+      $('track-chip').className = 'chip hidden';
+      $('track-note').textContent = '';
       renderImages(id, []);
+      photosKey = '';
       $('stats').innerHTML = '';
       $('updated').textContent = 'Checked ' + DT.ist(new Date()).slice(11);
       DT.setStatus($('status'), dataRes.status === 404 ? `No data from ${id} yet. Make sure the drone tag sends this exact Tracker ID.` : 'Could not load the data. Retrying automatically.', dataRes.status === 404 ? 'warn' : 'err');
       return;
     }
     const body = dataRes.body;
-    const points = body.points || [];
     const photos = body.photos || [];
-    // Redraw only when something changed, so the map does not jump while you look at it.
-    const key = `${body.seq}|${points.length}|${photos.length}`;
-    if (changed || key !== lastKey) {
-      renderMap(id, points, changed);
-      renderImages(id, photos);
-      lastKey = key;
-    }
-    const firstSeen = [points[0], photos[0]].filter(Boolean).map(x => x.receivedAt).sort()[0];
-    const lastSeen = [points[points.length - 1], photos[photos.length - 1]].filter(Boolean).map(x => x.receivedAt).sort().pop();
+    const track = renderTrack(id, body);
+    // Images are redrawn only when they change, so the page does not jump while you scroll.
+    const key = photos.length + '|' + (photos.length ? photos[photos.length - 1].id : '');
+    if (key !== photosKey) { renderImages(id, photos); photosKey = key; }
+
+    const s = track && track.s;
     $('stats').innerHTML = `
-      <span class="chip">${points.length} positions</span><span class="chip alt">${photos.length} images</span>
-      ${firstSeen ? `<span class="chip">First seen ${DT.ist(firstSeen)}</span>` : ''}
-      ${lastSeen ? `<span class="chip">Last seen ${DT.ist(lastSeen)}</span>` : ''}`;
+      <span class="chip">${(body.sessions || []).length} flight${(body.sessions || []).length === 1 ? '' : 's'}</span>
+      <span class="chip">${track ? track.pts.length : 0} positions in this flight</span>
+      <span class="chip alt">${photos.length} images</span>
+      ${s ? `<span class="chip">Started ${DT.ist(s.startedAt)}</span><span class="chip">Last seen ${DT.ist(s.lastSeenAt)}</span>` : ''}`;
     $('updated').textContent = 'Updated ' + DT.ist(new Date()).slice(11);
-    if (!quiet) DT.setStatus($('status'), `Showing ${points.length} positions and ${photos.length} images of ${id}.`, 'ok');
+    if (!quiet) DT.setStatus($('status'), `Showing ${id}: ${(body.sessions || []).length} flight(s) and ${photos.length} images.`, 'ok');
   }
 
   async function download(kind) {
@@ -157,6 +246,12 @@
   $('search-form').addEventListener('submit', e => { e.preventDefault(); load($('tracker').value); });
   $('csv-btn').addEventListener('click', () => download('csv'));
   $('zip-btn').addEventListener('click', () => download('zip'));
+  $('session').addEventListener('change', () => {
+    chosen = $('session').value;
+    clearTrack();
+    fittedFor = '';
+    if (current) load(current, { quiet: true });
+  });
 
   // Image viewer
   $('images').addEventListener('click', e => {
@@ -172,11 +267,11 @@
   $('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeBox(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBox(); });
 
-  // Start with ?tracker=…, or the signed-in user's own drone.
+  // Start with ?tracker=…, or the signed-in user's own drone. Then refresh by itself.
   const start = new URLSearchParams(location.search).get('tracker') || (me && me.drone.trackerId) || '';
   $('tracker').value = start;
   if (start) await load(start);
-  timer = setInterval(() => { if (current) load(current, { quiet: true }); }, 15000);
+  setInterval(() => { if (current) load(current, { quiet: true }); }, REFRESH_MS);
 })();
 </script>
 </body>

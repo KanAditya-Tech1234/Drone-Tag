@@ -9,10 +9,10 @@
 </head>
 <body>
 <main class="auth-bg">
-  <form class="auth-card form-grid" id="register-form" novalidate>
+  <form class="auth-card wide form-grid" id="register-form" novalidate>
     <div class="auth-head">
       <img src="/images/logo.png" alt="Abhyuday logo">
-      <div><h1>Create your account</h1><small>You and your drone, in two short steps</small></div>
+      <h1>Create your account</h1><small>You and your drone, in two short steps</small>
     </div>
     <div class="steps"><span id="step-1-tab" class="on">1 · Your details</span><span id="step-2-tab">2 · Your drone</span></div>
 
@@ -33,14 +33,14 @@
         <label class="field">Autonomy <select name="autonomy"></select><span class="field-error" data-for="autonomy"></span></label>
         <label class="field">Range <select name="range"></select><span class="field-error" data-for="range"></span></label>
       </div>
-      <div class="row">
+      <div class="actions">
         <button class="btn btn-outline" type="button" id="back-btn">Back</button>
         <button class="btn btn-primary grow" type="submit" id="submit">Create account</button>
       </div>
     </div>
 
     <div id="status" class="hidden"></div>
-    <p class="muted" style="margin:0">Already registered? <a href="/login">Log in</a></p>
+    <p class="auth-foot">Already registered? <a href="/login">Log in</a></p>
   </form>
 </main>
 <script src="/js/common.js"></script>

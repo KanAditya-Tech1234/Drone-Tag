@@ -51,6 +51,21 @@ test('devices send data without any key', async () => {
   assert.equal(image.status, 200);
 });
 
+test('reads include tracking sessions; out-of-range coordinates are refused', async () => {
+  assert.equal((await postJson('/api/data', { TrackerId: 'SES-01', Latitude: 123, Longitude: 72.5 })).status, 400);
+  await postJson('/api/data', { TrackerId: 'SES-01', Latitude: 23.0, Longitude: 72.5 });
+  await postJson('/api/data', { TrackerId: 'SES-01', Latitude: 23.001, Longitude: 72.5 });
+  const one = await (await fetch(`${base}/api/data/SES-01`)).json();
+  assert.equal(one.sessions.length, 1);
+  assert.equal(one.session.status, 'live');
+  assert.equal(one.session.start.lat, 23.0);
+  assert.equal(one.session.current.lat, 23.001);
+  assert.equal(one.session.end, null);
+  assert.ok(one.offlineAfterMs >= 120000);
+  const all = await (await fetch(`${base}/api/data`)).json();
+  assert.equal(all.trackerStatus.find(t => t.trackerId === 'SES-01').session.status, 'live');
+});
+
 test('dashboard settings work without a key', async () => {
   const ok = await postJson('/api/data', { intervalMs: 10000 });
   assert.equal(ok.status, 200);

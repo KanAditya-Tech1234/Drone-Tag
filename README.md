@@ -38,9 +38,26 @@ with your mobile number and password.
 
 - **Live map** (`/`): every drone at its latest position; click a pin for its
   Tracker ID and time (IST). Filter by Tracker ID, application, autonomy, range.
-- **Drone dashboard** (`/drone?tracker=ID`): drone details, flight path with
-  S (start) and E (latest), all its images below the map, refresh every 15 s,
+- **Drone dashboard** (`/drone?tracker=ID`): drone details, the flight path,
+  all its images below the map, refresh every 5 s, a flight selector,
   **Export CSV** (times in IST) and **Export images** (ZIP).
+
+### Map markers and when a flight ends
+
+| Marker | Meaning |
+|---|---|
+| Green pin | Start point: the first position of the flight. Never moves. |
+| Arrow | Current live position while the tag is sending; rotated to the telemetry `HeadingDeg` if sent, otherwise to the direction of travel. |
+| Red pin | End point: the last position received, shown only once the flight has ended. |
+
+The drone tags send no "power off" message, so the server ends a flight when
+nothing has arrived for `OFFLINE_AFTER_SECONDS` (default 120 s, never less than
+three transmission intervals). One missed upload or a short network drop does
+not end a flight. Data arriving after a longer silence starts a new flight; the
+earlier flight keeps its end point. `GET /api/data/<id>` now also returns
+`sessions`, `session` and `offlineAfterMs`, and `GET /api/data` returns
+`trackerStatus`; all earlier fields are unchanged. Positions outside
+latitude -90..90 / longitude -180..180 are refused.
 - Account, settings (current password needed to change anything), help,
   support and about pages.
 

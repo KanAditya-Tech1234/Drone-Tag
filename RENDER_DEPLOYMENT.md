@@ -61,6 +61,7 @@ Render dashboard → **tracker-drone**:
    |---|---|
    | `NODE_VERSION` | `22` |
    | `SESSION_SECRET` | a long random value (signs dashboard logins; without it everyone is logged out at every restart) |
+   | `OFFLINE_AFTER_SECONDS` | optional: seconds of silence after which a flight is shown as ended (default `120`) |
 
    **Delete `DEVICE_API_KEY` and `ADMIN_API_KEY` if they are listed** (no access keys are used any more).
    `PORT` is set by Render automatically; do not add it. `DATA_DIR` / `CONFIG_PATH` stay unset on Render.

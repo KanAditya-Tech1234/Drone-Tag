@@ -11,21 +11,19 @@
 <body>
 <div id="app-header"></div>
 <main class="page stack">
-  <div class="row">
-    <div class="grow"><h1>Live drone map</h1><p class="muted" style="margin:0">Every drone at its latest position. Times are Indian Standard Time.</p></div>
-    <div class="chips"><span class="chip" id="count-chip">– drones</span><span class="chip alt" id="updated-chip">Updating…</span></div>
+  <div class="page-head">
+    <div><h1>Live drone map</h1><p class="muted">The latest flight of every drone. Times are Indian Standard Time.</p></div>
+    <div class="chips"><span class="chip live hidden" id="live-chip"></span><span class="chip" id="count-chip">– drones</span><span class="chip alt" id="updated-chip">Updating…</span></div>
   </div>
 
   <section class="card">
-    <div class="row">
+    <div class="actions">
       <label class="field grow">Search Tracker ID <input id="f-search" placeholder="e.g. DRONE-01"></label>
       <label class="field grow">Application <select id="f-application"><option value="">All</option></select></label>
       <label class="field grow">Autonomy <select id="f-autonomy"><option value="">All</option></select></label>
       <label class="field grow">Range <select id="f-range"><option value="">All</option></select></label>
-      <div class="row" style="align-self:flex-end">
-        <button class="btn btn-primary" id="apply-btn">Apply</button>
-        <button class="btn btn-outline" id="reset-btn">Reset</button>
-      </div>
+      <button class="btn btn-primary" id="apply-btn">Apply</button>
+      <button class="btn btn-outline" id="reset-btn">Reset</button>
     </div>
     <p class="muted" style="margin:8px 0 0;font-size:13px">Application, autonomy and range come from drone registrations. Drones that are not registered are shown only when these three are set to "All".</p>
   </section>
@@ -39,15 +37,15 @@
 
   <section class="card">
     <h2 class="section-title">Device settings</h2>
-    <div class="row">
-      <label class="field">Transmission delay (all devices)
+    <div class="actions">
+      <label class="field" style="min-width:220px">Transmission delay (all devices)
         <select id="delay">
           <option value="1000">1 second</option><option value="2000">2 seconds</option><option value="5000">5 seconds</option>
           <option value="10000">10 seconds</option><option value="15000">15 seconds</option><option value="30000">30 seconds</option><option value="60000">60 seconds</option>
         </select>
       </label>
-      <button class="btn btn-danger" id="clear-btn" style="align-self:flex-end">Clear all data</button>
-      <div id="settings-status" class="hidden" style="align-self:flex-end"></div>
+      <button class="btn btn-danger" id="clear-btn">Clear all data</button>
+      <div id="settings-status" class="hidden"></div>
     </div>
   </section>
 </main>
@@ -58,11 +56,12 @@
   await DT.header('map');
   const map = L.map('map').setView([22.6, 72.5], 7);
   DT.baseLayers(map);
-  const pins = L.layerGroup().addTo(map);
-  const pinIcon = L.divIcon({ className: '', html: '<div class="pin drone"></div>', iconSize: [22, 22], iconAnchor: [11, 22], popupAnchor: [0, -22] });
+  DT.legend(map, ['start', 'live', 'end']);
+  // One entry per drone: { line, start, head (arrow or end pin), kind, deg }. Updated in place.
+  const layers = new Map();
 
   let drones = [];
-  let data = { points: [], photos: [], trackers: [] };
+  let data = { points: [], photos: [], trackers: [], status: [] };
   let fitted = false;
   const $ = id => document.getElementById(id);
 
@@ -94,6 +93,9 @@
       e.photos++;
       if (!e.lastSeen || ph.receivedAt > e.lastSeen) e.lastSeen = ph.receivedAt;
     }
+    for (const st of data.status) {
+      if (st.session) entry(st.trackerId).session = st.session;
+    }
     return [...byId.values()].sort((a, b) => String(b.lastSeen).localeCompare(String(a.lastSeen)));
   }
 
@@ -114,16 +116,50 @@
     const shown = all.filter(matches);
     $('count-chip').textContent = `${shown.length} of ${all.length} drones`;
 
-    pins.clearLayers();
+    const liveCount = shown.filter(t => t.session && t.session.status === 'live').length;
+    $('live-chip').classList.toggle('hidden', !liveCount);
+    $('live-chip').textContent = `${liveCount} live`;
+
     const bounds = [];
+    const keep = new Set();
     for (const t of shown) {
-      if (!t.latest) continue;
-      const ll = [t.latest.lat, t.latest.lon];
-      bounds.push(ll);
-      // Only the Tracker ID and the IST date-time on the map.
-      L.marker(ll, { icon: pinIcon }).addTo(pins).bindPopup(
-        `<div class="map-pop"><b>Tracker ID:</b> ${DT.esc(t.trackerId)}<br><span class="when"><b>Date &amp; time:</b> ${DT.ist(t.latest.receivedAt)}</span><br>
-         <a href="/drone?tracker=${encodeURIComponent(t.trackerId)}">Open drone dashboard →</a></div>`);
+      const s = t.session;
+      if (!s) continue;
+      const key = String(t.trackerId).toLowerCase();
+      keep.add(key);
+      // Only the Tracker ID and the IST date-time on the map (plus a link to the drone).
+      const link = `<br><a href="/drone?tracker=${encodeURIComponent(t.trackerId)}">Open drone dashboard →</a>`;
+      const pts = data.points.filter(p => String(p.trackerId).toLowerCase() === key && p.seq >= s.firstSeq && p.seq <= s.lastSeq);
+      let l = layers.get(key);
+      if (!l) {
+        l = {
+          line: L.polyline([], { color: '#b45309', weight: 3, opacity: 0.85 }).addTo(map),
+          start: L.marker([s.start.lat, s.start.lon], { icon: DT.markers.start() }).addTo(map).bindPopup(''),
+          head: null, kind: '', deg: null,
+        };
+        layers.set(key, l);
+      }
+      l.line.setLatLngs(pts.map(p => [p.lat, p.lon]));
+      l.start.setLatLng([s.start.lat, s.start.lon]).setPopupContent(DT.mapPopup(t.trackerId, s.start.receivedAt, link));
+      // Live: arrow at the latest position. Ended: red pin at the last position received.
+      const live = s.status === 'live';
+      const pos = live ? s.current : s.end;
+      const deg = live ? (s.headingDeg || 0) : null;
+      if (l.kind !== s.status || l.deg !== deg) {
+        if (l.head) map.removeLayer(l.head);
+        l.head = L.marker([pos.lat, pos.lon], { icon: live ? DT.markers.arrow(deg) : DT.markers.end(), zIndexOffset: 1000 })
+          .addTo(map).bindPopup('');
+        l.kind = s.status;
+        l.deg = deg;
+      }
+      l.head.setLatLng([pos.lat, pos.lon]).setPopupContent(DT.mapPopup(t.trackerId, pos.receivedAt, link));
+      bounds.push([pos.lat, pos.lon], [s.start.lat, s.start.lon]);
+    }
+    // Drones hidden by the filters (or cleared) leave the map.
+    for (const [key, l] of layers) {
+      if (keep.has(key)) continue;
+      [l.line, l.start, l.head].forEach(x => x && map.removeLayer(x));
+      layers.delete(key);
     }
     if (!fitted && bounds.length) { map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 }); fitted = true; }
 
@@ -132,7 +168,7 @@
       return `<div class="tracker-card">
         <h3><span>${DT.esc(t.trackerId)}</span>${d ? `<span class="chip">${DT.esc(d.application)}</span>` : '<span class="chip alt">Not registered</span>'}</h3>
         <div class="muted" style="font-size:13px">Last seen: ${t.lastSeen ? DT.ist(t.lastSeen) : '–'}</div>
-        <div class="chips"><span class="chip">${t.points} points</span><span class="chip alt">${t.photos} images</span></div>
+        <div class="chips">${t.session ? (t.session.status === 'live' ? '<span class="chip live">Live</span>' : '<span class="chip ended">Ended</span>') : ''}<span class="chip">${t.points} points</span><span class="chip alt">${t.photos} images</span></div>
         <a class="btn btn-outline" href="/drone?tracker=${encodeURIComponent(t.trackerId)}">Open dashboard</a>
       </div>`;
     }).join('') : '<div class="empty">No drone matches. Change the filters, or wait for a drone to send data.</div>';
@@ -141,7 +177,7 @@
   async function refresh() {
     const res = await DT.api('/api/data');
     if (res.ok) {
-      data = { points: res.body.points || [], photos: res.body.photos || [], trackers: res.body.trackers || [] };
+      data = { points: res.body.points || [], photos: res.body.photos || [], trackers: res.body.trackers || [], status: res.body.trackerStatus || [] };
       $('delay').value = String(res.body.intervalMs);
       $('updated-chip').textContent = 'Updated ' + DT.ist(new Date()).slice(11);
       render();
@@ -172,7 +208,7 @@
   });
 
   await refresh();
-  setInterval(refresh, 10000);
+  setInterval(refresh, 5000);
 })();
 </script>
 </body>

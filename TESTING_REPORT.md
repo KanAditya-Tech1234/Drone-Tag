@@ -90,3 +90,16 @@ The test data (`TEST-DRONE-01`) was left on the service so the drone team can se
 - CSV export: IST date-time column, formula cells neutralised; ZIP export: valid archive, one file per image, IST time in file names.
 
 Browser check (local, port 4100): login, live map pin pop-up (Tracker ID + IST time only), filters (application / range / search / reset), drone dashboard (details, S/E path, images grid below the map, exports), account, settings, help, support, about. All pages fit a 375 px phone screen without sideways scrolling. No console errors.
+
+## UI correction and live tracking markers (30 Oct 2026)
+
+`npm test`: **25 of 25 pass** (17 earlier + 8 new: 7 tracking-session rules in `test/sessions.test.js`, 1 API check of the new session fields and of out-of-range coordinates).
+
+Browser check (local server, test data only, offline window shortened to 20 s by the local launcher):
+
+- Login and register cards centred at 320, 375, 768 and 1280 px; heading, text and button labels centred.
+- Simulated flight (12 positions, 3 s apart): green start pin fixed, one arrow that moved with each update (rotated 39° for a north-east track), no red pin while live, markers never multiplied, no browser refresh needed.
+- 20 s after the last upload: arrow removed, red pin placed exactly at the last received position (matches the server's last point); chip "Tracking ended".
+- New data after the silence started Flight 2 (live, own start, arrow at 90° for an eastward track); Flight 1 kept its start and end and can be picked in the "Flight" selector.
+- Live map overview: "1 live" chip, path, start pin and arrow per drone, Live / Ended badge on the drone cards.
+- Legend inside the bottom-left corner of both maps at all widths; no page scrolls sideways at 375, 768 or 1280 px; no console errors.
