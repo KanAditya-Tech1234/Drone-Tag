@@ -388,8 +388,133 @@ function handleSetting(data, res) {
   return res.json({ status: 'ok', message: 'delay updated', intervalMs });
 }
 
-// Serve the dashboard (public/index.html).
-app.use(express.static(path.join(__dirname, 'public')));
+// =====================================================================
+// WEB DASHBOARD: accounts, pages, exports
+// =====================================================================
+// Only the web pages and the export downloads need a login. Devices keep sending to
+// POST /api/data without one, and the read APIs stay open for the Abhyuday Bharat backend.
+const { createAuth } = require('./lib/auth');
+const { toIST, pointsToCsv, buildZip } = require('./lib/export');
+
+app.set('trust proxy', 1);   // Render / nginx terminate HTTPS: lets req.secure see it
+const auth = createAuth({ dataDir: UPLOAD_DIR, writeJsonAtomic });
+const VIEWS = path.join(__dirname, 'views');
+
+function currentUser(req) {
+  return auth.userFromRequest(req);
+}
+function requirePage(req, res, next) {
+  if (currentUser(req)) return next();
+  res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+}
+function requireApi(req, res, next) {
+  if (currentUser(req)) return next();
+  res.status(401).json({ status: 'error', message: 'please log in' });
+}
+const page = file => (req, res) => res.sendFile(path.join(VIEWS, file));
+
+// Pages
+app.get('/', requirePage, page('overview.html'));
+app.get('/drone', requirePage, page('drone.html'));
+app.get('/account', requirePage, page('account.html'));
+app.get('/settings', requirePage, page('settings.html'));
+app.get(['/login', '/register'], (req, res, next) => (currentUser(req) ? res.redirect('/') : next()));
+app.get('/login', page('login.html'));
+app.get('/register', page('register.html'));
+app.get('/about', page('about.html'));
+app.get('/help', page('help.html'));
+app.get('/support', page('support.html'));
+
+// Static assets (CSS, JS, images) – no directory index.
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+
+// Account API
+const authJson = express.json({ limit: '16kb' });
+function startSession(req, res, user) {
+  res.setHeader('Set-Cookie', auth.sessionCookie(user, req.secure));
+}
+
+app.get('/auth/options', (req, res) => res.json({ status: 'ok', ...auth.options }));
+
+app.post('/auth/register', authJson, (req, res) => {
+  const { user, errors } = auth.register(req.body || {});
+  if (errors) return res.status(400).json({ status: 'error', message: 'please correct the highlighted fields', errors });
+  startSession(req, res, user);
+  console.log(`[${new Date().toISOString()}] new dashboard account for tracker ${user.drone.trackerId}`);
+  res.status(201).json({ status: 'ok', user: auth.publicUser(user) });
+});
+
+app.post('/auth/login', authJson, (req, res) => {
+  const ip = req.ip || 'unknown';
+  if (auth.tooManyFailures(ip)) {
+    return res.status(429).json({ status: 'error', message: 'too many failed attempts - try again in 15 minutes' });
+  }
+  const body = req.body || {};
+  const user = auth.login(body.phone, body.password);
+  if (!user) {
+    auth.recordFailure(ip);
+    return res.status(401).json({ status: 'error', message: 'wrong mobile number or password' });
+  }
+  auth.clearFailures(ip);
+  startSession(req, res, user);
+  res.json({ status: 'ok', user: auth.publicUser(user) });
+});
+
+app.post('/auth/logout', (req, res) => {
+  res.setHeader('Set-Cookie', auth.clearCookie(req.secure));
+  res.json({ status: 'ok' });
+});
+
+app.get('/auth/me', requireApi, (req, res) => res.json({ status: 'ok', user: auth.publicUser(currentUser(req)) }));
+
+app.put('/auth/me', requireApi, authJson, (req, res) => {
+  const { user, errors } = auth.update(currentUser(req), req.body || {});
+  if (errors) return res.status(400).json({ status: 'error', message: 'please correct the highlighted fields', errors });
+  res.json({ status: 'ok', user: auth.publicUser(user) });
+});
+
+// Registered drones (for the filters and the drone info table)
+app.get('/api/drones', requireApi, (req, res) => {
+  res.set('Cache-Control', 'no-store').json({ status: 'ok', drones: auth.drones() });
+});
+
+// Export one tracker's points as CSV (times in IST)
+app.get('/api/export/:trackerId/csv', requireApi, (req, res) => {
+  const trackerId = req.params.trackerId;
+  const points = history.filter(p => sameTracker(p.trackerId, trackerId));
+  if (points.length === 0) return res.status(404).json({ status: 'error', message: `no data for tracker "${trackerId}"` });
+  const base = `${req.protocol}://${req.get('host')}`;
+  const csv = pointsToCsv(points, p => base + photoUrl(p.trackerId, p.photoId));
+  const safe = trackerId.replace(/[^A-Za-z0-9._-]/g, '_');
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="drone_${safe}_${toIST(new Date().toISOString()).slice(0, 10)}.csv"`,
+    'Cache-Control': 'no-store',
+  });
+  res.send(csv);
+});
+
+// Export one tracker's images as a ZIP (file names carry the IST capture time)
+app.get('/api/export/:trackerId/images.zip', requireApi, (req, res) => {
+  const trackerId = req.params.trackerId;
+  const mine = photos.filter(p => sameTracker(p.trackerId, trackerId));
+  if (mine.length === 0) return res.status(404).json({ status: 'error', message: `no images for tracker "${trackerId}"` });
+  const files = [];
+  mine.forEach((p, i) => {
+    try {
+      const data = fs.readFileSync(path.join(UPLOAD_DIR, p.file));
+      const stamp = toIST(p.receivedAt).replace(/^(\d\d)-(\d\d)-(\d{4}) (\d\d):(\d\d):(\d\d)$/, '$3$2$1_$4$5$6');
+      files.push({ name: `${String(i + 1).padStart(3, '0')}_${stamp}_IST.${path.extname(p.file).slice(1) || 'jpg'}`, data, date: new Date(p.receivedAt) });
+    } catch (err) { /* file removed meanwhile */ }
+  });
+  const safe = trackerId.replace(/[^A-Za-z0-9._-]/g, '_');
+  res.set({
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="drone_${safe}_images.zip"`,
+    'Cache-Control': 'no-store',
+  });
+  res.send(buildZip(files));
+});
 
 // =====================================================================
 // API 1:  POST /api/data

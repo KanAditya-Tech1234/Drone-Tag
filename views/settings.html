@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack" style="max-width:860px">
+  <h1>Settings</h1>
+  <form class="stack" id="settings-form" novalidate>
+    <section class="card form-grid">
+      <h2 class="section-title">Your details</h2>
+      <label class="field">Full name <input name="name" autocomplete="name"><span class="field-error" data-for="name"></span></label>
+      <div class="two">
+        <label class="field">Email <input name="email" type="email" autocomplete="email"><span class="field-error" data-for="email"></span></label>
+        <label class="field">Mobile number <input name="phone" inputmode="numeric" autocomplete="tel"><span class="field-error" data-for="phone"></span></label>
+      </div>
+      <label class="field">New password (leave empty to keep it) <input name="password" type="password" autocomplete="new-password" placeholder="8+ characters, A-z and 0-9"><span class="field-error" data-for="password"></span></label>
+    </section>
+    <section class="card form-grid">
+      <h2 class="section-title">Your drone</h2>
+      <div class="two">
+        <label class="field">Tracker ID <input name="trackerId" autocapitalize="characters"><span class="field-error" data-for="trackerId"></span></label>
+        <label class="field">Drone UIN <input name="uin" autocapitalize="characters"><span class="field-error" data-for="uin"></span></label>
+        <label class="field">Category <select name="category"></select><span class="field-error" data-for="category"></span></label>
+        <label class="field">Application <select name="application"></select><span class="field-error" data-for="application"></span></label>
+        <label class="field">Autonomy <select name="autonomy"></select><span class="field-error" data-for="autonomy"></span></label>
+        <label class="field">Range <select name="range"></select><span class="field-error" data-for="range"></span></label>
+      </div>
+      <p class="muted" style="margin:0;font-size:13px">The Tracker ID must be exactly the ID your drone tag sends.</p>
+    </section>
+    <section class="card form-grid">
+      <label class="field">Current password (needed to save any change) <input name="currentPassword" type="password" autocomplete="current-password"><span class="field-error" data-for="currentPassword"></span></label>
+      <div id="status" class="hidden"></div>
+      <div class="row"><button class="btn btn-primary" type="submit" id="save">Save changes</button><a class="btn btn-outline" href="/account">Cancel</a></div>
+    </section>
+  </form>
+</main>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  const user = await DT.header('');
+  if (!user) return;
+  const form = document.getElementById('settings-form');
+  const status = document.getElementById('status');
+  const opts = (await DT.api('/auth/options', { redirectOn401: false })).body;
+  const fill = (name, list, value) => {
+    form.elements[name].innerHTML = (list || []).map(v => `<option${v === value ? ' selected' : ''}>${DT.esc(v)}</option>`).join('');
+  };
+  fill('category', opts.categories, user.drone.category);
+  fill('application', opts.applications, user.drone.application);
+  fill('autonomy', opts.autonomy, user.drone.autonomy);
+  fill('range', opts.ranges, user.drone.range);
+  for (const k of ['name', 'email', 'phone']) form.elements[k].value = user[k];
+  for (const k of ['trackerId', 'uin']) form.elements[k].value = user.drone[k];
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {};
+    ['name', 'email', 'phone', 'password', 'trackerId', 'uin', 'category', 'application', 'autonomy', 'range', 'currentPassword']
+      .forEach(k => { body[k] = form.elements[k].value; });
+    form.querySelectorAll('.field-error').forEach(el => { el.textContent = ''; });
+    if (!body.currentPassword) {
+      form.querySelector('[data-for="currentPassword"]').textContent = 'Enter your current password';
+      return;
+    }
+    const btn = document.getElementById('save');
+    btn.disabled = true;
+    const res = await DT.api('/auth/me', { method: 'PUT', body: JSON.stringify(body) });
+    btn.disabled = false;
+    if (res.ok) {
+      form.elements.password.value = '';
+      form.elements.currentPassword.value = '';
+      DT.setStatus(status, 'Saved.', 'ok');
+      DT.header('');
+      return;
+    }
+    const errors = res.body.errors || {};
+    form.querySelectorAll('.field-error').forEach(el => { el.textContent = errors[el.dataset.for] || ''; });
+    DT.setStatus(status, 'Please correct the highlighted fields.', 'err');
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone dashboard · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack">
+  <section class="card">
+    <form class="row" id="search-form">
+      <label class="field grow">Tracker ID <input id="tracker" placeholder="Enter a Tracker ID, e.g. DRONE-01" autocapitalize="characters"></label>
+      <div class="row" style="align-self:flex-end">
+        <button class="btn btn-primary" type="submit" id="fetch-btn">Show drone</button>
+        <button class="btn btn-accent" type="button" id="csv-btn">Export CSV</button>
+        <button class="btn btn-outline" type="button" id="zip-btn">Export images</button>
+      </div>
+    </form>
+    <div id="status" class="hidden" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="margin-bottom:10px">
+      <h2 class="section-title grow" style="margin:0">Drone details</h2>
+      <span class="chip alt" id="updated">–</span>
+    </div>
+    <div class="table-wrap">
+      <table class="info">
+        <thead><tr><th>Tracker ID</th><th>Drone UIN</th><th>Category</th><th>Application</th><th>Autonomy</th><th>Range</th><th>Owner</th></tr></thead>
+        <tbody id="info-body"><tr><td colspan="7" class="muted">Enter a Tracker ID to load a drone.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="chips" id="stats" style="margin-top:12px"></div>
+  </section>
+
+  <div id="map" class="map"></div>
+
+  <section>
+    <div class="row"><h2 class="section-title grow">Images</h2><span class="muted" id="img-count"></span></div>
+    <div id="images" class="images-grid"><div class="empty">Images of the drone appear here.</div></div>
+  </section>
+</main>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-label="Image">
+  <img id="lb-img" alt="Drone image">
+  <div class="cap" id="lb-cap"></div>
+  <div class="row"><a class="btn btn-accent" id="lb-open" target="_blank" rel="noopener">Open original</a><button class="btn btn-outline" id="lb-close" type="button">Close</button></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  const me = await DT.header('drone');
+  const $ = id => document.getElementById(id);
+  const map = L.map('map').setView([22.6, 72.5], 7);
+  DT.baseLayers(map);
+  const pathLayer = L.layerGroup().addTo(map);
+  const badge = (cls, text) => L.divIcon({ className: '', html: `<div class="end-badge ${cls}">${text}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+
+  let current = '';
+  let lastKey = '';
+  let timer = null;
+
+  // Only the Tracker ID and the date-time (IST) on the map.
+  const popup = (id, iso) => `<div class="map-pop"><b>Tracker ID:</b> ${DT.esc(id)}<br><span class="when"><b>Date &amp; time:</b> ${DT.ist(iso)}</span></div>`;
+
+  function renderInfo(id, drone) {
+    const cell = v => `<td>${v ? DT.esc(v) : '<span class="muted">–</span>'}</td>`;
+    $('info-body').innerHTML = drone
+      ? `<tr>${cell(id)}${cell(drone.uin)}${cell(drone.category)}${cell(drone.application)}${cell(drone.autonomy)}${cell(drone.range)}${cell(drone.owner)}</tr>`
+      : `<tr>${cell(id)}<td colspan="6" class="muted">This Tracker ID is not registered by any user (data is still shown).</td></tr>`;
+  }
+
+  function renderMap(id, points, fit) {
+    pathLayer.clearLayers();
+    if (!points.length) return;
+    const coords = points.map(p => [p.lat, p.lon]);
+    L.polyline(coords, { color: '#b45309', weight: 4, opacity: 0.9 }).addTo(pathLayer);
+    points.forEach((p, i) => {
+      if (i === 0 || i === points.length - 1) return;
+      L.circleMarker([p.lat, p.lon], { radius: 4, color: '#fff', weight: 1.5, fillColor: '#15803d', fillOpacity: 1 })
+        .addTo(pathLayer).bindPopup(popup(id, p.receivedAt));
+    });
+    const first = points[0];
+    const last = points[points.length - 1];
+    L.marker([first.lat, first.lon], { icon: badge('start', 'S') }).addTo(pathLayer).bindPopup(popup(id, first.receivedAt));
+    if (points.length > 1) L.marker([last.lat, last.lon], { icon: badge('end', 'E') }).addTo(pathLayer).bindPopup(popup(id, last.receivedAt));
+    if (fit) map.fitBounds(L.latLngBounds(coords), { padding: [40, 40], maxZoom: 17 });
+  }
+
+  function renderImages(id, photos) {
+    $('img-count').textContent = photos.length ? `${photos.length} image${photos.length === 1 ? '' : 's'}, newest first` : '';
+    if (!photos.length) { $('images').innerHTML = '<div class="empty">No images from this drone yet.</div>'; return; }
+    $('images').innerHTML = photos.slice().reverse().map(p => `
+      <figure class="img-card" style="margin:0">
+        <button type="button" data-src="${DT.esc(p.url)}" data-cap="${DT.esc(id)} · ${DT.ist(p.receivedAt)}">
+          <img src="${DT.esc(p.url)}" alt="Image from ${DT.esc(id)}" loading="lazy">
+        </button>
+        <figcaption class="cap"><b>${DT.esc(id)}</b><br><span class="muted">${DT.ist(p.receivedAt)}</span></figcaption>
+      </figure>`).join('');
+  }
+
+  async function load(id, { quiet = false } = {}) {
+    id = id.trim();
+    if (!id) { DT.setStatus($('status'), 'Enter a Tracker ID.', 'warn'); return; }
+    const changed = id.toLowerCase() !== current.toLowerCase();
+    current = id;
+    if (!quiet) DT.setStatus($('status'), `Loading ${id}…`, 'info');
+    history.replaceState(null, '', '/drone?tracker=' + encodeURIComponent(id));
+
+    const [dataRes, regRes] = await Promise.all([DT.api('/api/data/' + encodeURIComponent(id)), DT.api('/api/drones')]);
+    const drone = regRes.ok ? regRes.body.drones.find(d => d.trackerId.toLowerCase() === id.toLowerCase()) : null;
+    renderInfo(id, drone);
+
+    if (!dataRes.ok) {
+      renderMap(id, [], false);
+      renderImages(id, []);
+      $('stats').innerHTML = '';
+      $('updated').textContent = 'Checked ' + DT.ist(new Date()).slice(11);
+      DT.setStatus($('status'), dataRes.status === 404 ? `No data from ${id} yet. Make sure the drone tag sends this exact Tracker ID.` : 'Could not load the data. Retrying automatically.', dataRes.status === 404 ? 'warn' : 'err');
+      return;
+    }
+    const body = dataRes.body;
+    const points = body.points || [];
+    const photos = body.photos || [];
+    // Redraw only when something changed, so the map does not jump while you look at it.
+    const key = `${body.seq}|${points.length}|${photos.length}`;
+    if (changed || key !== lastKey) {
+      renderMap(id, points, changed);
+      renderImages(id, photos);
+      lastKey = key;
+    }
+    const firstSeen = [points[0], photos[0]].filter(Boolean).map(x => x.receivedAt).sort()[0];
+    const lastSeen = [points[points.length - 1], photos[photos.length - 1]].filter(Boolean).map(x => x.receivedAt).sort().pop();
+    $('stats').innerHTML = `
+      <span class="chip">${points.length} positions</span><span class="chip alt">${photos.length} images</span>
+      ${firstSeen ? `<span class="chip">First seen ${DT.ist(firstSeen)}</span>` : ''}
+      ${lastSeen ? `<span class="chip">Last seen ${DT.ist(lastSeen)}</span>` : ''}`;
+    $('updated').textContent = 'Updated ' + DT.ist(new Date()).slice(11);
+    if (!quiet) DT.setStatus($('status'), `Showing ${points.length} positions and ${photos.length} images of ${id}.`, 'ok');
+  }
+
+  async function download(kind) {
+    if (!current) return DT.setStatus($('status'), 'Load a drone first.', 'warn');
+    const url = `/api/export/${encodeURIComponent(current)}/${kind === 'csv' ? 'csv' : 'images.zip'}`;
+    // Check first so a missing export shows a message instead of a broken download.
+    const head = await fetch(url, { method: 'HEAD', credentials: 'same-origin' });
+    if (!head.ok) return DT.setStatus($('status'), kind === 'csv' ? `No positions to export for ${current}.` : `No images to export for ${current}.`, 'warn');
+    location.href = url;
+  }
+
+  $('search-form').addEventListener('submit', e => { e.preventDefault(); load($('tracker').value); });
+  $('csv-btn').addEventListener('click', () => download('csv'));
+  $('zip-btn').addEventListener('click', () => download('zip'));
+
+  // Image viewer
+  $('images').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-src]');
+    if (!btn) return;
+    $('lb-img').src = btn.dataset.src;
+    $('lb-open').href = btn.dataset.src;
+    $('lb-cap').textContent = btn.dataset.cap;
+    $('lightbox').classList.add('open');
+  });
+  const closeBox = () => $('lightbox').classList.remove('open');
+  $('lb-close').addEventListener('click', closeBox);
+  $('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeBox(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBox(); });
+
+  // Start with ?tracker=…, or the signed-in user's own drone.
+  const start = new URLSearchParams(location.search).get('tracker') || (me && me.drone.trackerId) || '';
+  $('tracker').value = start;
+  if (start) await load(start);
+  timer = setInterval(() => { if (current) load(current, { quiet: true }); }, 15000);
+})();
+</script>
+</body>
+</html>

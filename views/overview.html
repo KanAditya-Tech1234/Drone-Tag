@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live map · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack">
+  <div class="row">
+    <div class="grow"><h1>Live drone map</h1><p class="muted" style="margin:0">Every drone at its latest position. Times are Indian Standard Time.</p></div>
+    <div class="chips"><span class="chip" id="count-chip">– drones</span><span class="chip alt" id="updated-chip">Updating…</span></div>
+  </div>
+
+  <section class="card">
+    <div class="row">
+      <label class="field grow">Search Tracker ID <input id="f-search" placeholder="e.g. DRONE-01"></label>
+      <label class="field grow">Application <select id="f-application"><option value="">All</option></select></label>
+      <label class="field grow">Autonomy <select id="f-autonomy"><option value="">All</option></select></label>
+      <label class="field grow">Range <select id="f-range"><option value="">All</option></select></label>
+      <div class="row" style="align-self:flex-end">
+        <button class="btn btn-primary" id="apply-btn">Apply</button>
+        <button class="btn btn-outline" id="reset-btn">Reset</button>
+      </div>
+    </div>
+    <p class="muted" style="margin:8px 0 0;font-size:13px">Application, autonomy and range come from drone registrations. Drones that are not registered are shown only when these three are set to "All".</p>
+  </section>
+
+  <div id="map" class="map"></div>
+
+  <section>
+    <h2 class="section-title">Drones</h2>
+    <div id="tracker-list" class="tracker-list"></div>
+  </section>
+
+  <section class="card">
+    <h2 class="section-title">Device settings</h2>
+    <div class="row">
+      <label class="field">Transmission delay (all devices)
+        <select id="delay">
+          <option value="1000">1 second</option><option value="2000">2 seconds</option><option value="5000">5 seconds</option>
+          <option value="10000">10 seconds</option><option value="15000">15 seconds</option><option value="30000">30 seconds</option><option value="60000">60 seconds</option>
+        </select>
+      </label>
+      <button class="btn btn-danger" id="clear-btn" style="align-self:flex-end">Clear all data</button>
+      <div id="settings-status" class="hidden" style="align-self:flex-end"></div>
+    </div>
+  </section>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await DT.header('map');
+  const map = L.map('map').setView([22.6, 72.5], 7);
+  DT.baseLayers(map);
+  const pins = L.layerGroup().addTo(map);
+  const pinIcon = L.divIcon({ className: '', html: '<div class="pin drone"></div>', iconSize: [22, 22], iconAnchor: [11, 22], popupAnchor: [0, -22] });
+
+  let drones = [];
+  let data = { points: [], photos: [], trackers: [] };
+  let fitted = false;
+  const $ = id => document.getElementById(id);
+
+  const reg = await DT.api('/api/drones');
+  drones = reg.ok ? reg.body.drones : [];
+  const options = await DT.api('/auth/options', { redirectOn401: false });
+  const fill = (id, list) => { $(id).innerHTML += (list || []).map(v => `<option>${DT.esc(v)}</option>`).join(''); };
+  fill('f-application', options.body.applications);
+  fill('f-autonomy', options.body.autonomy);
+  fill('f-range', options.body.ranges);
+
+  const droneOf = id => drones.find(d => d.trackerId.toLowerCase() === String(id).toLowerCase());
+
+  function summary() {
+    // Latest point, counts and last time per tracker.
+    const byId = new Map();
+    const entry = id => {
+      const key = String(id).toLowerCase();
+      if (!byId.has(key)) byId.set(key, { trackerId: id, latest: null, points: 0, photos: 0, lastSeen: null });
+      return byId.get(key);
+    };
+    for (const p of data.points) {
+      const e = entry(p.trackerId);
+      e.points++; e.latest = p;
+      if (!e.lastSeen || p.receivedAt > e.lastSeen) e.lastSeen = p.receivedAt;
+    }
+    for (const ph of data.photos) {
+      const e = entry(ph.trackerId);
+      e.photos++;
+      if (!e.lastSeen || ph.receivedAt > e.lastSeen) e.lastSeen = ph.receivedAt;
+    }
+    return [...byId.values()].sort((a, b) => String(b.lastSeen).localeCompare(String(a.lastSeen)));
+  }
+
+  function matches(t) {
+    const q = $('f-search').value.trim().toLowerCase();
+    if (q && !String(t.trackerId).toLowerCase().includes(q)) return false;
+    const want = { application: $('f-application').value, autonomy: $('f-autonomy').value, range: $('f-range').value };
+    if (!want.application && !want.autonomy && !want.range) return true;
+    const d = droneOf(t.trackerId);
+    if (!d) return false;
+    return (!want.application || d.application === want.application) &&
+           (!want.autonomy || d.autonomy === want.autonomy) &&
+           (!want.range || d.range === want.range);
+  }
+
+  function render() {
+    const all = summary();
+    const shown = all.filter(matches);
+    $('count-chip').textContent = `${shown.length} of ${all.length} drones`;
+
+    pins.clearLayers();
+    const bounds = [];
+    for (const t of shown) {
+      if (!t.latest) continue;
+      const ll = [t.latest.lat, t.latest.lon];
+      bounds.push(ll);
+      // Only the Tracker ID and the IST date-time on the map.
+      L.marker(ll, { icon: pinIcon }).addTo(pins).bindPopup(
+        `<div class="map-pop"><b>Tracker ID:</b> ${DT.esc(t.trackerId)}<br><span class="when"><b>Date &amp; time:</b> ${DT.ist(t.latest.receivedAt)}</span><br>
+         <a href="/drone?tracker=${encodeURIComponent(t.trackerId)}">Open drone dashboard →</a></div>`);
+    }
+    if (!fitted && bounds.length) { map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 }); fitted = true; }
+
+    $('tracker-list').innerHTML = shown.length ? shown.map(t => {
+      const d = droneOf(t.trackerId);
+      return `<div class="tracker-card">
+        <h3><span>${DT.esc(t.trackerId)}</span>${d ? `<span class="chip">${DT.esc(d.application)}</span>` : '<span class="chip alt">Not registered</span>'}</h3>
+        <div class="muted" style="font-size:13px">Last seen: ${t.lastSeen ? DT.ist(t.lastSeen) : '–'}</div>
+        <div class="chips"><span class="chip">${t.points} points</span><span class="chip alt">${t.photos} images</span></div>
+        <a class="btn btn-outline" href="/drone?tracker=${encodeURIComponent(t.trackerId)}">Open dashboard</a>
+      </div>`;
+    }).join('') : '<div class="empty">No drone matches. Change the filters, or wait for a drone to send data.</div>';
+  }
+
+  async function refresh() {
+    const res = await DT.api('/api/data');
+    if (res.ok) {
+      data = { points: res.body.points || [], photos: res.body.photos || [], trackers: res.body.trackers || [] };
+      $('delay').value = String(res.body.intervalMs);
+      $('updated-chip').textContent = 'Updated ' + DT.ist(new Date()).slice(11);
+      render();
+    } else {
+      $('updated-chip').textContent = 'Update failed – retrying';
+    }
+  }
+
+  $('apply-btn').addEventListener('click', () => { fitted = false; render(); });
+  $('reset-btn').addEventListener('click', () => {
+    ['f-search', 'f-application', 'f-autonomy', 'f-range'].forEach(id => { $(id).value = ''; });
+    fitted = false; render();
+  });
+  $('f-search').addEventListener('keydown', e => { if (e.key === 'Enter') { fitted = false; render(); } });
+
+  // Device settings: same POST /api/data the old dashboard used.
+  const settingsStatus = $('settings-status');
+  $('delay').addEventListener('change', async () => {
+    const res = await DT.api('/api/data', { method: 'POST', body: JSON.stringify({ intervalMs: Number($('delay').value) }) });
+    DT.setStatus(settingsStatus, res.ok ? `Delay set to ${Number($('delay').value) / 1000} s` : (res.body.message || 'Could not change the delay'), res.ok ? 'ok' : 'err');
+  });
+  $('clear-btn').addEventListener('click', async () => {
+    if (!confirm('Delete ALL positions, images, telemetry and configuration files of every drone? This cannot be undone.')) return;
+    const res = await DT.api('/api/data', { method: 'POST', body: JSON.stringify({ action: 'reset' }) });
+    DT.setStatus(settingsStatus, res.ok ? 'All data cleared' : (res.body.message || 'Could not clear'), res.ok ? 'ok' : 'err');
+    fitted = false;
+    refresh();
+  });
+
+  await refresh();
+  setInterval(refresh, 10000);
+})();
+</script>
+</body>
+</html>

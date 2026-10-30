@@ -60,6 +60,7 @@ Render dashboard → **tracker-drone**:
    | Key | Value |
    |---|---|
    | `NODE_VERSION` | `22` |
+   | `SESSION_SECRET` | a long random value (signs dashboard logins; without it everyone is logged out at every restart) |
 
    **Delete `DEVICE_API_KEY` and `ADMIN_API_KEY` if they are listed** (no access keys are used any more).
    `PORT` is set by Render automatically; do not add it. `DATA_DIR` / `CONFIG_PATH` stay unset on Render.
@@ -109,6 +110,7 @@ Push to the deployed branch → Render redeploys automatically. Each redeploy **
 ## Render free-plan limits
 
 - **Disk is temporary:** images, configuration files, telemetry, positions and the saved delay are lost on every restart, redeploy or wake-up after sleep. Keeping them on Render needs a **paid** plan with a persistent disk, or external storage. Neither is set up; that decision is yours (cost).
+- **Dashboard accounts are lost too:** `users.json` is on the same temporary disk, so everyone has to register again after a restart, redeploy or wake-up. The drone data APIs need no account and are not affected.
 - Sleeps after 15 minutes without requests.
 - 750 free instance hours per month per workspace.
 

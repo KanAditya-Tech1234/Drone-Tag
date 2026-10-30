@@ -77,3 +77,16 @@ The test data (`TEST-DRONE-01`) was left on the service so the drone team can se
 - **Reading is public:** anyone with the URL can see positions, images and telemetry. That was already the case. Adding a read key would also need changes in the Abhyuday backend, the dashboard and the tracker app.
 - **No rate limiting** yet.
 - **No access keys:** anyone with the URL can send data, read it, change the delay or clear all data. Accepted for testing (project decision); worth revisiting before real use.
+
+## Dashboard update (30 Oct 2026): accounts, drone dashboard, filters, exports
+
+`npm test`: **17 of 17 pass** (10 earlier API tests + 7 new):
+
+- Dashboard pages redirect to `/login` without a session; help, about, support, login and register pages are open.
+- `POST /api/data` and `GET /api/data/<id>` still work without login (devices and the Abhyuday app are unaffected).
+- Register: field validation, duplicate phone / email / Tracker ID (any case) refused, password stored only as a scrypt hash, HttpOnly cookie.
+- Login: wrong password refused, `+91` accepted, forged cookie refused; 10 wrong attempts from one IP → `429` for 15 minutes.
+- Settings: changes need the current password.
+- CSV export: IST date-time column, formula cells neutralised; ZIP export: valid archive, one file per image, IST time in file names.
+
+Browser check (local, port 4100): login, live map pin pop-up (Tracker ID + IST time only), filters (application / range / search / reset), drone dashboard (details, S/E path, images grid below the map, exports), account, settings, help, support, about. All pages fit a 375 px phone screen without sideways scrolling. No console errors.

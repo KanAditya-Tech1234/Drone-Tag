@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main class="auth-bg">
+  <form class="auth-card form-grid" id="login-form" novalidate>
+    <div class="auth-head">
+      <img src="/images/logo.png" alt="Abhyuday logo">
+      <div><h1>Drone Tag</h1><small>Log in to see your drones live</small></div>
+    </div>
+    <label class="field">Mobile number
+      <input id="phone" name="phone" inputmode="numeric" autocomplete="tel" placeholder="10-digit mobile number" required>
+    </label>
+    <label class="field">Password
+      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required>
+    </label>
+    <div id="status" class="hidden"></div>
+    <button class="btn btn-primary" id="submit" type="submit">Log in</button>
+    <p class="muted" style="margin:0">New here? <a href="/register">Register yourself and your drone</a> · <a href="/help">Help</a></p>
+  </form>
+</main>
+<script src="/js/common.js"></script>
+<script>
+  const form = document.getElementById('login-form');
+  const status = document.getElementById('status');
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const phone = document.getElementById('phone').value.trim();
+    const password = document.getElementById('password').value;
+    if (!/^(\+?91)?[6-9]\d{9}$/.test(phone.replace(/[\s-]/g, '')) || !password) {
+      return DT.setStatus(status, 'Enter your 10-digit mobile number and your password.', 'err');
+    }
+    const btn = document.getElementById('submit');
+    btn.disabled = true;
+    DT.setStatus(status, 'Logging in…', 'info');
+    const res = await DT.api('/auth/login', { method: 'POST', body: JSON.stringify({ phone, password }), redirectOn401: false });
+    btn.disabled = false;
+    if (res.ok) return (location.href = DT.safeNext('/'));
+    DT.setStatus(status, res.body.message ? res.body.message.charAt(0).toUpperCase() + res.body.message.slice(1) + '.' : 'Could not log in. Try again.', 'err');
+  });
+</script>
+</body>
+</html>

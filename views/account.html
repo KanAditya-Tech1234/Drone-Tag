@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your account · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack" style="max-width:860px">
+  <h1>Your account</h1>
+  <section class="card">
+    <h2 class="section-title">Your details</h2>
+    <div class="table-wrap"><table class="info" style="min-width:0"><tbody id="user-body"></tbody></table></div>
+  </section>
+  <section class="card">
+    <h2 class="section-title">Your drone</h2>
+    <div class="table-wrap"><table class="info" style="min-width:0"><tbody id="drone-body"></tbody></table></div>
+  </section>
+  <div class="row">
+    <a class="btn btn-primary" id="my-drone" href="/drone">Open my drone dashboard</a>
+    <a class="btn btn-outline" href="/settings">Edit details</a>
+  </div>
+</main>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  const user = await DT.header('');
+  if (!user) return;
+  const rows = list => list.map(([k, v]) => `<tr><th style="width:38%;border-radius:0">${k}</th><td>${DT.esc(v || '–')}</td></tr>`).join('');
+  document.getElementById('user-body').innerHTML = rows([
+    ['Name', user.name], ['Email', user.email], ['Mobile', '+91 ' + user.phone], ['Member since', DT.ist(user.createdAt)],
+  ]);
+  const d = user.drone;
+  document.getElementById('drone-body').innerHTML = rows([
+    ['Tracker ID', d.trackerId], ['Drone UIN', d.uin], ['Category', d.category],
+    ['Application', d.application], ['Autonomy', d.autonomy], ['Range', d.range],
+  ]);
+  document.getElementById('my-drone').href = '/drone?tracker=' + encodeURIComponent(d.trackerId);
+})();
+</script>
+</body>
+</html>

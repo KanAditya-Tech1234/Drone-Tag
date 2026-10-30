@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack prose" style="max-width:860px">
+  <h1>About Drone Tag</h1>
+  <section class="card">
+    <p><b>Drone Tag</b> is the live tracking platform of <b>Abhyuday Bharat Project Pvt. Ltd.</b> for agricultural drones. Each drone carries a tag with a unique <b>Tracker ID</b>. The tag sends the drone's position and photos of the field to this server, and they appear here within seconds.</p>
+    <p>The photos also reach the farmer: in the Abhyuday Bharat app, the farmer's completed report shows the images sent by the drone of the pilot who did the job.</p>
+  </section>
+  <section class="card">
+    <h2 class="section-title">What you can do</h2>
+    <ul>
+      <li>See every drone at its latest position on a live map (street map or satellite).</li>
+      <li>Filter drones by application, autonomy and range.</li>
+      <li>Open one drone to see its full flight path, its details and all its photos.</li>
+      <li>Export a drone's positions as a CSV file and its photos as a ZIP file.</li>
+      <li>All times are shown in Indian Standard Time (IST).</li>
+    </ul>
+  </section>
+  <section class="card">
+    <h2 class="section-title">How it works</h2>
+    <p>Drone tags send data to <code>POST /api/data</code> (positions and photos), <code>POST /api/telemetry</code> and <code>POST /api/config</code>. Registered users log in with their mobile number to use this dashboard.</p>
+  </section>
+</main>
+<script src="/js/common.js"></script>
+<script>DT.header('about');</script>
+</body>
+</html>

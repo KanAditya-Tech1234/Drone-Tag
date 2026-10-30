@@ -159,3 +159,116 @@ test('unknown /api paths answer 404 JSON', async () => {
   assert.equal(res.status, 404);
   assert.equal((await res.json()).status, 'error');
 });
+
+// ---------------------------------------------------------------------
+// Dashboard accounts, page protection and exports
+// ---------------------------------------------------------------------
+const cookieOf = res => (res.headers.getSetCookie()[0] || '').split(';')[0];
+const ACCOUNT = {
+  name: 'Test Pilot', email: 'pilot@example.com', phone: '9876543210', password: 'Secret123',
+  trackerId: 'EXP-01', uin: 'uin-test-01', category: 'Small', application: 'Spraying', autonomy: 'Manual', range: 'Short',
+};
+let session;
+
+test('dashboard pages need login; help pages and the device API do not', async () => {
+  const home = await fetch(base + '/', { redirect: 'manual' });
+  assert.equal(home.status, 302);
+  assert.match(home.headers.get('location'), /^\/login\?next=/);
+  assert.equal((await fetch(base + '/drone', { redirect: 'manual' })).status, 302);
+  for (const p of ['/login', '/register', '/about', '/help', '/support']) assert.equal((await fetch(base + p)).status, 200, p);
+  assert.equal((await fetch(base + '/auth/me')).status, 401);
+  assert.equal((await fetch(base + '/api/drones')).status, 401);
+  assert.equal((await fetch(base + '/api/export/EXP-01/csv')).status, 401);
+  assert.equal((await fetch(base + '/api/export/EXP-01/images.zip')).status, 401);
+  assert.equal((await postJson('/api/data', { TrackerId: 'EXP-01', Latitude: 23.05, Longitude: 72.52 })).status, 200);
+  assert.equal((await fetch(base + '/api/data/EXP-01')).status, 200);
+});
+
+test('register signs in, stores no plain password and rejects duplicates', async () => {
+  const bad = await postJson('/auth/register', { ...ACCOUNT, phone: '123', password: 'short', trackerId: 'bad id!' });
+  assert.equal(bad.status, 400);
+  const errors = (await bad.json()).errors;
+  assert.ok(errors.phone && errors.password && errors.trackerId);
+
+  const res = await postJson('/auth/register', ACCOUNT);
+  assert.equal(res.status, 201);
+  assert.match(res.headers.get('set-cookie'), /HttpOnly/);
+  session = cookieOf(res);
+  const { user } = await res.json();
+  assert.equal(user.drone.uin, 'UIN-TEST-01');
+  assert.equal(user.passwordHash, undefined);
+  assert.ok(!fs.readFileSync(path.join(DATA_DIR, 'users.json'), 'utf8').includes(ACCOUNT.password));
+
+  const dup = await postJson('/auth/register', { ...ACCOUNT, trackerId: 'exp-01' });
+  assert.equal(dup.status, 400);
+  const dupErrors = (await dup.json()).errors;
+  assert.ok(dupErrors.email && dupErrors.phone && dupErrors.trackerId);
+
+  const home = await fetch(base + '/', { headers: { Cookie: session } });
+  assert.equal(home.status, 200);
+  const me = await (await fetch(base + '/auth/me', { headers: { Cookie: session } })).json();
+  assert.equal(me.user.phone, ACCOUNT.phone);
+  const drones = await (await fetch(base + '/api/drones', { headers: { Cookie: session } })).json();
+  assert.equal(drones.drones.find(d => d.trackerId === 'EXP-01').application, 'Spraying');
+});
+
+test('login works with the right password only; a forged cookie is refused', async () => {
+  assert.equal((await postJson('/auth/login', { phone: ACCOUNT.phone, password: 'Wrong1234' })).status, 401);
+  const ok = await postJson('/auth/login', { phone: '+91 ' + ACCOUNT.phone, password: ACCOUNT.password });
+  assert.equal(ok.status, 200);
+  assert.equal((await fetch(base + '/auth/me', { headers: { Cookie: cookieOf(ok) } })).status, 200);
+  const forged = session.replace(/.$/, c => (c === 'a' ? 'b' : 'a'));
+  assert.equal((await fetch(base + '/auth/me', { headers: { Cookie: forged } })).status, 401);
+});
+
+test('settings need the current password', async () => {
+  const put = body => fetch(base + '/auth/me', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', Cookie: session }, body: JSON.stringify(body),
+  });
+  const noPass = await put({ name: 'New Name' });
+  assert.equal(noPass.status, 400);
+  assert.ok((await noPass.json()).errors.currentPassword);
+  const ok = await put({ name: 'New Name', range: 'Long', currentPassword: ACCOUNT.password });
+  assert.equal(ok.status, 200);
+  const { user } = await ok.json();
+  assert.equal(user.name, 'New Name');
+  assert.equal(user.drone.range, 'Long');
+  assert.equal(user.drone.trackerId, 'EXP-01');
+});
+
+test('CSV export uses IST and neutralises formulas', async () => {
+  await postJson('/api/data', { TrackerId: 'EXP-01', Latitude: 23.06, Longitude: 72.53, Timestamp: '=HYPERLINK("x")' });
+  const res = await fetch(base + '/api/export/EXP-01/csv', { headers: { Cookie: session } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/csv/);
+  const csv = await res.text();
+  const lines = csv.replace(/^\uFEFF/, '').trim().split(/\r?\n/);
+  assert.match(lines[0], /^"tracker_id","date_time_ist","latitude","longitude"/);
+  assert.match(lines[1], /^"EXP-01","\d\d-\d\d-\d{4} \d\d:\d\d:\d\d",/);
+  assert.ok(!/,"=HYPERLINK/.test(csv));
+  assert.equal((await fetch(base + '/api/export/NOPE/csv', { headers: { Cookie: session } })).status, 404);
+});
+
+test('images export is a valid ZIP with one entry per photo', async () => {
+  for (let i = 0; i < 2; i++) {
+    await fetch(`${base}/api/data?trackerId=EXP-01&lat=23.06&lon=72.53`, {
+      method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: JPEG,
+    });
+  }
+  const res = await fetch(base + '/api/export/EXP-01/images.zip', { headers: { Cookie: session } });
+  assert.equal(res.status, 200);
+  const zip = Buffer.from(await res.arrayBuffer());
+  assert.equal(zip.readUInt32LE(0), 0x04034b50);
+  const end = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  assert.ok(end > 0);
+  assert.equal(zip.readUInt16LE(end + 10), 2);
+  assert.ok(zip.includes(Buffer.from('_IST.jpg')));
+});
+
+test('logout ends the session cookie; repeated wrong logins are blocked', async () => {
+  const out = await fetch(base + '/auth/logout', { method: 'POST', headers: { Cookie: session } });
+  assert.match(out.headers.get('set-cookie'), /Max-Age=0/);
+  let last;
+  for (let i = 0; i < 11; i++) last = await postJson('/auth/login', { phone: ACCOUNT.phone, password: 'Wrong1234' });
+  assert.equal(last.status, 429);
+});

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Register · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main class="auth-bg">
+  <form class="auth-card form-grid" id="register-form" novalidate>
+    <div class="auth-head">
+      <img src="/images/logo.png" alt="Abhyuday logo">
+      <div><h1>Create your account</h1><small>You and your drone, in two short steps</small></div>
+    </div>
+    <div class="steps"><span id="step-1-tab" class="on">1 · Your details</span><span id="step-2-tab">2 · Your drone</span></div>
+
+    <div id="step-1" class="form-grid">
+      <label class="field">Full name <input name="name" autocomplete="name" placeholder="e.g. Ramesh Patel"><span class="field-error" data-for="name"></span></label>
+      <label class="field">Email <input name="email" type="email" autocomplete="email" placeholder="you@example.com"><span class="field-error" data-for="email"></span></label>
+      <label class="field">Mobile number (used to log in) <input name="phone" inputmode="numeric" autocomplete="tel" placeholder="10-digit mobile number"><span class="field-error" data-for="phone"></span></label>
+      <label class="field">Password <input name="password" type="password" autocomplete="new-password" placeholder="8+ characters, A-z and 0-9"><span class="field-error" data-for="password"></span></label>
+      <button class="btn btn-primary" type="button" id="next-btn">Next: your drone</button>
+    </div>
+
+    <div id="step-2" class="form-grid hidden">
+      <label class="field">Tracker ID (the ID your drone tag sends) <input name="trackerId" placeholder="e.g. DRONE-01" autocapitalize="characters"><span class="field-error" data-for="trackerId"></span></label>
+      <label class="field">Drone UIN <input name="uin" placeholder="e.g. UA-2026-0001" autocapitalize="characters"><span class="field-error" data-for="uin"></span></label>
+      <div class="two">
+        <label class="field">Category <select name="category"></select><span class="field-error" data-for="category"></span></label>
+        <label class="field">Application <select name="application"></select><span class="field-error" data-for="application"></span></label>
+        <label class="field">Autonomy <select name="autonomy"></select><span class="field-error" data-for="autonomy"></span></label>
+        <label class="field">Range <select name="range"></select><span class="field-error" data-for="range"></span></label>
+      </div>
+      <div class="row">
+        <button class="btn btn-outline" type="button" id="back-btn">Back</button>
+        <button class="btn btn-primary grow" type="submit" id="submit">Create account</button>
+      </div>
+    </div>
+
+    <div id="status" class="hidden"></div>
+    <p class="muted" style="margin:0">Already registered? <a href="/login">Log in</a></p>
+  </form>
+</main>
+<script src="/js/common.js"></script>
+<script>
+  const form = document.getElementById('register-form');
+  const status = document.getElementById('status');
+  const val = name => form.elements[name].value;
+  const STEP1 = ['name', 'email', 'phone', 'password'];
+
+  function showErrors(errors) {
+    form.querySelectorAll('.field-error').forEach(el => { el.textContent = errors[el.dataset.for] || ''; });
+  }
+  function step(n) {
+    document.getElementById('step-1').classList.toggle('hidden', n !== 1);
+    document.getElementById('step-2').classList.toggle('hidden', n !== 2);
+    document.getElementById('step-1-tab').classList.toggle('on', n === 1);
+    document.getElementById('step-2-tab').classList.toggle('on', n === 2);
+  }
+
+  // Drop-down choices come from the server so both always agree.
+  DT.api('/auth/options', { redirectOn401: false }).then(({ body }) => {
+    const fill = (name, list) => {
+      form.elements[name].innerHTML = '<option value="">Choose…</option>' + list.map(v => `<option>${DT.esc(v)}</option>`).join('');
+    };
+    fill('category', body.categories || []);
+    fill('application', body.applications || []);
+    fill('autonomy', body.autonomy || []);
+    fill('range', (body.ranges || []).map(r => r));
+  });
+
+  document.getElementById('next-btn').addEventListener('click', () => {
+    const errors = {};
+    if (val('name').trim().length < 2) errors.name = 'Enter your name';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(val('email').trim())) errors.email = 'Enter a valid email address';
+    if (!/^(\+?91)?[6-9]\d{9}$/.test(val('phone').replace(/[\s-]/g, ''))) errors.phone = 'Enter a 10-digit Indian mobile number';
+    const pw = val('password');
+    if (pw.length < 8 || !/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/\d/.test(pw)) errors.password = 'Use at least 8 characters with an uppercase letter, a lowercase letter and a number';
+    showErrors(errors);
+    if (!Object.keys(errors).length) step(2);
+  });
+  document.getElementById('back-btn').addEventListener('click', () => step(1));
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {};
+    ['name', 'email', 'phone', 'password', 'trackerId', 'uin', 'category', 'application', 'autonomy', 'range'].forEach(k => { body[k] = val(k); });
+    const btn = document.getElementById('submit');
+    btn.disabled = true;
+    DT.setStatus(status, 'Creating your account…', 'info');
+    const res = await DT.api('/auth/register', { method: 'POST', body: JSON.stringify(body), redirectOn401: false });
+    btn.disabled = false;
+    if (res.ok) return (location.href = '/drone?tracker=' + encodeURIComponent(res.body.user.drone.trackerId));
+    const errors = res.body.errors || {};
+    showErrors(errors);
+    if (STEP1.some(k => errors[k])) step(1);
+    DT.setStatus(status, 'Please correct the highlighted fields.', 'err');
+  });
+</script>
+</body>
+</html>

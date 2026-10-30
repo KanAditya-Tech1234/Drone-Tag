@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Help · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack prose" style="max-width:860px">
+  <h1>Help</h1>
+  <details class="faq" open><summary>How do I register myself and my drone?</summary>
+    <p>Open <a href="/register">Register</a>. Step 1: your name, email, mobile number and a password. Step 2: your drone's Tracker ID, UIN, category, application, autonomy and range. You are logged in straight away.</p></details>
+  <details class="faq"><summary>What is the Tracker ID?</summary>
+    <p>The ID your drone tag sends with every position and photo (for example <code>DRONE-01</code>). Enter exactly the same ID when you register. If you fly drones for the Abhyuday Bharat app, use the drone tag number you registered there.</p></details>
+  <details class="faq"><summary>How do I see where a drone is?</summary>
+    <p>The <a href="/">Live map</a> shows every drone at its latest position. Click a pin to see its Tracker ID and the time (IST), then "Open drone dashboard".</p></details>
+  <details class="faq"><summary>How do I see a drone's flight path and photos?</summary>
+    <p>Open the <a href="/drone">Drone dashboard</a>, enter the Tracker ID and press "Show drone". The map shows the path from S (start) to E (latest). Scroll down for all its photos; click one to enlarge it. The page refreshes by itself every 15 seconds.</p></details>
+  <details class="faq"><summary>How do I filter drones?</summary>
+    <p>On the Live map, choose an application, autonomy or range and press Apply. These come from drone registrations, so drones nobody has registered only show when the filters are set to "All".</p></details>
+  <details class="faq"><summary>How do I export data?</summary>
+    <p>On the Drone dashboard, "Export CSV" downloads the drone's positions (date and time in IST, latitude, longitude, altitude and photo links). "Export images" downloads all its photos in one ZIP file.</p></details>
+  <details class="faq"><summary>My drone does not appear</summary>
+    <p>Check that the drone tag is on and has mobile signal, and that it sends exactly the registered Tracker ID. The first upload after a quiet period can take up to a minute while the server wakes up.</p></details>
+  <p>Still stuck? See <a href="/support">Support</a>.</p>
+</main>
+<script src="/js/common.js"></script>
+<script>DT.header('help');</script>
+</body>
+</html>

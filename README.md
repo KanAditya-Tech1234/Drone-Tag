@@ -19,12 +19,35 @@ drone-tracker-updated/
 ├── package.json
 ├── render.yaml               <- Render settings (build/start command, health check)
 ├── config.json               <- saved transmission delay
-├── public/index.html         <- live map: trail, drone marker, photos, delay selector
+├── lib/auth.js               <- dashboard accounts (scrypt hashes, signed session cookie)
+├── lib/export.js             <- IST time, CSV and ZIP export
+├── views/                    <- pages: login, register, live map, drone dashboard,
+│                                account, settings, help, support, about
+├── public/                   <- CSS, page script, logo
 ├── new/new.ino               <- EC200U tracker sketch
 ├── esp32s3_sim7670g/
 │   └── esp32s3_sim7670g.ino  <- Waveshare camera board sketch
 └── mobile/App.js             <- Expo (React Native) phone app
 ```
+
+## Dashboard (login required)
+
+The web pages need an account: open `/register`, enter your details and your
+drone (Tracker ID, UIN, category, application, autonomy, range), then log in
+with your mobile number and password.
+
+- **Live map** (`/`): every drone at its latest position; click a pin for its
+  Tracker ID and time (IST). Filter by Tracker ID, application, autonomy, range.
+- **Drone dashboard** (`/drone?tracker=ID`): drone details, flight path with
+  S (start) and E (latest), all its images below the map, refresh every 15 s,
+  **Export CSV** (times in IST) and **Export images** (ZIP).
+- Account, settings (current password needed to change anything), help,
+  support and about pages.
+
+**Devices and the mobile app are unaffected:** `POST /api/data`, the telemetry
+and config APIs and `GET /api/data/<trackerId>` stay open without any login
+or key. Accounts are kept in `<DATA_DIR>/users.json` (passwords only as
+scrypt hashes). Set `SESSION_SECRET` so logins survive a restart.
 
 ## How the transmission delay works
 
