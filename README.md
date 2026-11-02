@@ -42,6 +42,45 @@ with your mobile number and password.
   all its images below the map, refresh every 5 s, a flight selector,
   **Export CSV** (times in IST) and **Export images** (ZIP).
 
+### Drone dashboard layout
+
+- **Drone bar** (top): drone selector, Dashboard / All Images / All Data, and
+  **Transmission interval** (that drone's own sending delay, 1 s to 5 min).
+- **Map** with an **Images** button on its right: opens a sidebar with the
+  drone's images, newest at the top, four visible at a time (scroll for more),
+  each with its date and time; click one to enlarge it. **All Images** opens
+  `/images?tracker=ID`.
+- **GPS data** table right under the map: latitude, longitude, altitude
+  (`--` when missing) and time (IST), newest first, five rows visible.
+  **All Data** opens `/data?tracker=ID`.
+- All Images and All Data show everything the server still keeps for that drone
+  (the latest 500 images / 1000 GPS records of all drones together) with a
+  date and time filter.
+
+### Per-drone transmission interval
+
+`config.json` holds the default and each drone's own delay:
+
+```json
+{ "intervalMs": 10000, "trackerIntervalsMs": { "CAM-01": 5000, "CAM-02": 15000 } }
+```
+
+The reply to every upload from a drone (`POST /api/data` as JSON, form-data or a
+raw image, `POST /api/telemetry`, `POST /api/config`) carries **that drone's**
+`intervalMs`; the sketches already read it, so no firmware change is needed.
+Drones without their own setting get the default. The dashboard sets it with
+`PUT /api/interval/<TrackerId>` `{ "intervalMs": 5000 }` (`null` = back to the
+default; login required). Older `config.json` files with only `intervalMs` still work.
+
+### Time shown for GPS records and images
+
+Both sketches send `Timestamp` as `YYYY-MM-DD HH:MM:SS` already in IST, so it is
+shown as is (not shifted again). An ISO time with `Z` or an offset is converted
+from that zone. If the device time is missing or not believable (before 2020,
+more than 10 minutes ahead of the server, or more than a week old), the time the
+server received the record is shown, marked "(received)". The API returns this
+as `recordedAt` (UTC) and `timeSource` (`device` / `server`) on every point and image.
+
 ### Map markers and when a flight ends
 
 | Marker | Meaning |
@@ -51,7 +90,7 @@ with your mobile number and password.
 | Red pin | End point: the last position received, shown only once the flight has ended. |
 
 The drone tags send no "power off" message, so the server ends a flight when
-nothing has arrived for `OFFLINE_AFTER_SECONDS` (default 120 s, never less than
+nothing has arrived for `OFFLINE_AFTER_SECONDS` (default 300 s = 5 minutes, never less than
 three transmission intervals). One missed upload or a short network drop does
 not end a flight. Data arriving after a longer silence starts a new flight; the
 earlier flight keeps its end point. `GET /api/data/<id>` now also returns

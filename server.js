@@ -33,23 +33,42 @@ const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json
 
 const MIN_INTERVAL_MS = 1000;     // don't allow silly-fast spam
 const MAX_INTERVAL_MS = 300000;   // 5 min ceiling
-const DEFAULT_CONFIG = { intervalMs: 5000 };
+const DEFAULT_CONFIG = { intervalMs: 5000, trackerIntervalsMs: {} };
+const TRACKER_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
+function validInterval(n) {
+  return typeof n === 'number' && Number.isInteger(n) && n >= MIN_INTERVAL_MS && n <= MAX_INTERVAL_MS;
+}
+
+// config.json: { "intervalMs": <default for every drone>,
+//                "trackerIntervalsMs": { "<TrackerId>": <that drone's own delay> } }
+// A file with only "intervalMs" (older versions) still loads; bad entries are dropped.
 function loadConfig() {
+  const loaded = { ...DEFAULT_CONFIG, trackerIntervalsMs: {} };
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (
-      typeof parsed.intervalMs === 'number' &&
-      parsed.intervalMs >= MIN_INTERVAL_MS &&
-      parsed.intervalMs <= MAX_INTERVAL_MS
-    ) {
-      return { intervalMs: parsed.intervalMs };
+    const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    if (validInterval(parsed.intervalMs)) loaded.intervalMs = parsed.intervalMs;
+    const perTracker = parsed.trackerIntervalsMs;
+    if (perTracker && typeof perTracker === 'object' && !Array.isArray(perTracker)) {
+      for (const [id, ms] of Object.entries(perTracker)) {
+        if (TRACKER_ID_RE.test(id) && validInterval(ms)) loaded.trackerIntervalsMs[id] = ms;
+      }
     }
   } catch (err) {
     // File missing or corrupt on first run — fall through to default.
   }
-  return { ...DEFAULT_CONFIG };
+  return loaded;
+}
+
+// The delay a drone should use: its own setting, else the default. Tracker IDs ignore case.
+function trackerIntervalKey(trackerId) {
+  const want = String(trackerId).toLowerCase();
+  return Object.keys(config.trackerIntervalsMs).find(k => k.toLowerCase() === want);
+}
+function intervalFor(trackerId) {
+  if (trackerId === undefined || trackerId === null) return config.intervalMs;
+  const key = trackerIntervalKey(trackerId);
+  return key ? config.trackerIntervalsMs[key] : config.intervalMs;
 }
 
 // Write to a temp file then rename, so a crash mid-write can't corrupt it.
@@ -263,14 +282,17 @@ function photoUrl(trackerId, id) {
   return `/api/data/${encodeURIComponent(trackerId)}?photo=${encodeURIComponent(id)}`;
 }
 
+// recordedAt / timeSource: when it was really recorded (see lib/time.js).
 function photoMeta(p) {
   if (!p) return null;
   const { file, ...meta } = p;
-  return { ...meta, url: photoUrl(p.trackerId, p.id) };
+  return { ...meta, ...recordedTime(p.timestamp, p.receivedAt), url: photoUrl(p.trackerId, p.id) };
 }
 
 function withPhotoUrl(point) {
-  return point.photoId ? { ...point, photoUrl: photoUrl(point.trackerId, point.photoId) } : point;
+  const out = { ...point, ...recordedTime(point.timestamp, point.receivedAt) };
+  if (point.photoId) out.photoUrl = photoUrl(point.trackerId, point.photoId);
+  return out;
 }
 
 // Tracker IDs are matched without caring about upper/lower case.
@@ -299,18 +321,23 @@ function formatAltitude(alt) {
 // TRACKING SESSIONS (see lib/sessions.js)
 // ---------------------------------------------------------------------
 // The tags send no power-off message, so a flight counts as ended after this
-// much silence: OFFLINE_AFTER_SECONDS (default 120), but never less than three
-// transmission intervals, so a single missed upload does not end a flight.
+// much silence: OFFLINE_AFTER_SECONDS (default 300 = 5 minutes), but never less
+// than three of that drone's transmission intervals, so a single missed upload or
+// a short network drop does not end a flight.
 const { buildSessions } = require('./lib/sessions');
-const OFFLINE_AFTER_MS = Math.max(10, Number(process.env.OFFLINE_AFTER_SECONDS) || 120) * 1000;
+const { recordedTime } = require('./lib/time');
+const DEFAULT_OFFLINE_AFTER_MS = 300000;
+const OFFLINE_AFTER_MS = Number(process.env.OFFLINE_AFTER_SECONDS) > 0
+  ? Math.max(10, Number(process.env.OFFLINE_AFTER_SECONDS)) * 1000
+  : DEFAULT_OFFLINE_AFTER_MS;
 
-function offlineAfterMs() {
-  return Math.max(OFFLINE_AFTER_MS, 3 * config.intervalMs);
+function offlineAfterMs(trackerId) {
+  return Math.max(OFFLINE_AFTER_MS, 3 * intervalFor(trackerId));
 }
 
 function sessionsOf(trackerId, points) {
   return buildSessions(points, {
-    offlineAfterMs: offlineAfterMs(),
+    offlineAfterMs: offlineAfterMs(trackerId),
     telemetry: telemetry.filter(r => sameTracker(r.trackerId, trackerId)),
   });
 }
@@ -378,7 +405,7 @@ function storeReport(data, image) {
     (hasFix ? ` -> ${lat}, ${lon}` : ' (no GPS fix)') +
     (photo ? ` + ${photo.mime} ${Math.round(photo.size / 1024)} KB -> uploads/${photo.file}` : '')
   );
-  return { point, photo };
+  return { point, photo, trackerId };
 }
 
 // Handles { "intervalMs": ... } and { "action": "reset" } from the dashboard.
@@ -399,14 +426,19 @@ function handleSetting(data, res) {
       message: `intervalMs must be a number between ${MIN_INTERVAL_MS} and ${MAX_INTERVAL_MS}`,
     });
   }
-  config = { intervalMs };
+  // Only the default changes; every drone's own setting is kept.
+  config = { ...config, intervalMs };
+  saveConfig();
+  console.log(`Default delay updated -> ${intervalMs} ms`);
+  return res.json({ status: 'ok', message: 'delay updated', intervalMs });
+}
+
+function saveConfig() {
   try {
     writeJsonAtomic(CONFIG_PATH, config);
   } catch (err) {
-    console.error('Could not persist config.json (interval is still updated in memory):', err);
+    console.error('Could not persist config.json (the setting is still updated in memory):', err);
   }
-  console.log(`Delay updated -> ${intervalMs} ms`);
-  return res.json({ status: 'ok', message: 'delay updated', intervalMs });
 }
 
 // =====================================================================
@@ -437,6 +469,8 @@ const page = file => (req, res) => res.sendFile(path.join(VIEWS, file));
 // Pages
 app.get('/', requirePage, page('overview.html'));
 app.get('/drone', requirePage, page('drone.html'));
+app.get('/images', requirePage, page('images.html'));   // all images of one drone (?tracker=ID)
+app.get('/data', requirePage, page('data.html'));       // all GPS records of one drone (?tracker=ID)
 app.get('/account', requirePage, page('account.html'));
 app.get('/settings', requirePage, page('settings.html'));
 app.get(['/login', '/register'], (req, res, next) => (currentUser(req) ? res.redirect('/') : next()));
@@ -499,13 +533,59 @@ app.get('/api/drones', requireApi, (req, res) => {
   res.set('Cache-Control', 'no-store').json({ status: 'ok', drones: auth.drones() });
 });
 
+// One drone's own transmission delay. The drone receives it as "intervalMs" in the reply
+// to its next upload. { "intervalMs": null } removes its own setting (back to the default).
+function intervalInfo(trackerId) {
+  const key = trackerIntervalKey(trackerId);
+  return {
+    status: 'ok',
+    trackerId,
+    intervalMs: intervalFor(trackerId),
+    custom: Boolean(key),
+    defaultIntervalMs: config.intervalMs,
+    minIntervalMs: MIN_INTERVAL_MS,
+    maxIntervalMs: MAX_INTERVAL_MS,
+  };
+}
+
+function trackerParam(req, res, next) {
+  if (!TRACKER_ID_RE.test(req.params.trackerId)) {
+    return res.status(400).json({ status: 'error', message: 'Tracker ID: 1-64 letters, digits, ".", "_" or "-"' });
+  }
+  next();
+}
+
+app.get('/api/interval/:trackerId', requireApi, trackerParam, (req, res) => {
+  res.set('Cache-Control', 'no-store').json(intervalInfo(req.params.trackerId));
+});
+
+app.put('/api/interval/:trackerId', requireApi, trackerParam, authJson, (req, res) => {
+  const trackerId = req.params.trackerId;
+  const value = (req.body || {}).intervalMs;
+  if (value !== null && !validInterval(value)) {
+    return res.status(400).json({
+      status: 'error',
+      message: `intervalMs must be a whole number of milliseconds between ${MIN_INTERVAL_MS} and ${MAX_INTERVAL_MS}, or null for the default`,
+    });
+  }
+  // Only this drone's entry changes (any old spelling of its ID is replaced).
+  const trackerIntervalsMs = { ...config.trackerIntervalsMs };
+  const old = trackerIntervalKey(trackerId);
+  if (old) delete trackerIntervalsMs[old];
+  if (value !== null) trackerIntervalsMs[trackerId] = value;
+  config = { ...config, trackerIntervalsMs };
+  saveConfig();
+  console.log(`[${new Date().toISOString()}] delay for ${trackerId} -> ${value === null ? `default (${config.intervalMs} ms)` : `${value} ms`}`);
+  res.json(intervalInfo(trackerId));
+});
+
 // Export one tracker's points as CSV (times in IST)
 app.get('/api/export/:trackerId/csv', requireApi, (req, res) => {
   const trackerId = req.params.trackerId;
   const points = history.filter(p => sameTracker(p.trackerId, trackerId));
   if (points.length === 0) return res.status(404).json({ status: 'error', message: `no data for tracker "${trackerId}"` });
   const base = `${req.protocol}://${req.get('host')}`;
-  const csv = pointsToCsv(points, p => base + photoUrl(p.trackerId, p.photoId));
+  const csv = pointsToCsv(points.map(withPhotoUrl), p => base + photoUrl(p.trackerId, p.photoId));
   const safe = trackerId.replace(/[^A-Za-z0-9._-]/g, '_');
   res.set({
     'Content-Type': 'text/csv; charset=utf-8',
@@ -581,7 +661,7 @@ app.post('/api/data', readBody, (req, res) => {
     }
     const result = storeReport(fields, image);
     if (result.error) return res.status(400).json({ status: 'error', message: result.error });
-    return res.json({ status: 'ok', intervalMs: config.intervalMs, photoId: result.photo ? result.photo.id : null });
+    return res.json({ status: 'ok', intervalMs: intervalFor(result.trackerId), photoId: result.photo ? result.photo.id : null });
   }
 
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -615,7 +695,7 @@ app.post('/api/data', readBody, (req, res) => {
     }
     const result = storeReport(data, null);
     if (result.error) return res.status(400).json({ status: 'error', message: result.error });
-    return res.json({ status: 'ok', intervalMs: config.intervalMs, photoId: null });
+    return res.json({ status: 'ok', intervalMs: intervalFor(result.trackerId), photoId: null });
   }
 
   // ---- B) raw image file ----
@@ -628,7 +708,7 @@ app.post('/api/data', readBody, (req, res) => {
   }
   const result = storeReport(req.query, { buffer: body, mime, originalName: req.query.filename || null });
   if (result.error) return res.status(400).json({ status: 'error', message: result.error });
-  res.json({ status: 'ok', intervalMs: config.intervalMs, photoId: result.photo.id });
+  res.json({ status: 'ok', intervalMs: intervalFor(result.trackerId), photoId: result.photo.id });
 });
 
 // =====================================================================
@@ -684,14 +764,16 @@ app.get('/api/data/:trackerId?', (req, res) => {
   const latest = myPoints[myPoints.length - 1] || null;
 
   // Tracking sessions: for one tracker all of them; for all trackers the latest one each.
-  const extra = { offlineAfterMs: offlineAfterMs() };
+  // For one tracker: its own delay and all its sessions. For all trackers: the default delay
+  // and each tracker's own delay and latest session.
+  const extra = { offlineAfterMs: offlineAfterMs(trackerId), defaultIntervalMs: config.intervalMs };
   if (trackerId !== undefined) {
     extra.sessions = sessionsOf(trackerId, myPoints);
     extra.session = extra.sessions[extra.sessions.length - 1] || null;
   } else {
     extra.trackerStatus = trackerList().map(id => {
       const list = sessionsOf(id, history.filter(p => sameTracker(p.trackerId, id)));
-      return { trackerId: id, session: list[list.length - 1] || null };
+      return { trackerId: id, intervalMs: intervalFor(id), session: list[list.length - 1] || null };
     });
   }
 
@@ -700,7 +782,7 @@ app.get('/api/data/:trackerId?', (req, res) => {
     status: 'ok',
     trackerId: trackerId === undefined ? null : (latest || myPhotos[0]).trackerId,
     trackers: trackerList(),
-    intervalMs: config.intervalMs,
+    intervalMs: intervalFor(trackerId),
     serverTime: new Date().toISOString(),
     generation,
     seq,
@@ -746,7 +828,6 @@ const TELEMETRY_NUMBERS = {
   Satellites: { min: 0, max: 100, integer: true },
   SignalDbm: { min: -150, max: 0 },            // modem signal strength
 };
-const TRACKER_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const KNOWN_TELEMETRY_KEYS = new Set([
   'trackerid', 'id', 'timestamp', 'ts', 'time', 'latitude', 'lat', 'longitude', 'lon', 'lng',
   'altitude', 'alt', 'flightstatus', 'spraystatus', 'extra',
@@ -874,7 +955,7 @@ app.post('/api/telemetry', express.json({ limit: MAX_JSON_BYTES, strict: true })
     (record.sprayStatus ? ` spray ${record.sprayStatus}` : ''));
   res.status(201).json({
     status: 'ok',
-    intervalMs: config.intervalMs,
+    intervalMs: intervalFor(record.trackerId),
     telemetryId: saved.id,
     seq: saved.seq,
     ...(ignored.length ? { ignoredFields: ignored.slice(0, 20) } : {}),
@@ -999,7 +1080,7 @@ app.post('/api/config', readConfigBody, (req, res) => {
   });
   console.log(`[${receivedAt}] ${trackerId} config ${safeName} ${buffer.length} bytes -> configs/${file}`);
   const { file: _file, ...meta } = saved;
-  res.status(201).json({ status: 'ok', intervalMs: config.intervalMs, config: { ...meta, url: configUrl(saved) } });
+  res.status(201).json({ status: 'ok', intervalMs: intervalFor(trackerId), config: { ...meta, url: configUrl(saved) } });
 });
 
 function configUrl(c) {
@@ -1072,10 +1153,11 @@ function start(port = PORT) {
     console.log(`Drone Tag server listening on http://0.0.0.0:${port}`);
     console.log(`Dashboard: http://localhost:${port}   Health: http://localhost:${port}/health`);
     console.log(`Data is saved in: ${UPLOAD_DIR}`);
-    console.log(`Current tracker delay: ${config.intervalMs} ms`);
+    console.log(`Default tracker delay: ${config.intervalMs} ms` +
+      (Object.keys(config.trackerIntervalsMs).length ? `, own delays: ${JSON.stringify(config.trackerIntervalsMs)}` : ''));
   });
 }
 
 if (require.main === module) start();
 
-module.exports = { app, start };
+module.exports = { app, start, loadConfig };

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All GPS data · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack">
+  <div class="page-head">
+    <div><h1 id="title">All GPS data</h1><p class="muted">Every GPS record of this drone that the server still keeps, newest first. Times are Indian Standard Time.</p></div>
+    <div class="chips"><span class="chip alt" id="count">–</span><button class="btn btn-outline" id="refresh" type="button">Refresh</button></div>
+  </div>
+  <div id="drone-bar"></div>
+  <section class="card" id="filter"></section>
+  <div id="status" class="hidden"></div>
+  <div class="gps-wrap tall">
+    <table class="gps">
+      <thead><tr><th class="num">Latitude</th><th class="num">Longitude</th><th class="num">Altitude</th><th>Time (IST)</th></tr></thead>
+      <tbody id="rows"><tr class="empty-row"><td colspan="4">Loading GPS records…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted" style="font-size:13px;margin:0">The server keeps the latest 1000 GPS records of all drones together; older ones are removed automatically.
+    "(received)" means the drone sent no usable time, so the time the server received the record is shown.</p>
+</main>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await DT.header('drone');
+  const $ = id => document.getElementById(id);
+  const trackerId = new URLSearchParams(location.search).get('tracker') || '';
+  const bar = DT.droneBar($('drone-bar'), { trackerId, active: 'data' });
+  let points = [];          // newest first
+  let filter = { date: '', from: '', to: '' };
+  DT.filterBar($('filter'), f => { filter = f; render(); });
+  const empty = text => `<tr class="empty-row"><td colspan="4">${text}</td></tr>`;
+
+  if (!trackerId) {
+    $('rows').innerHTML = empty('Choose a drone above to see its GPS records.');
+    return;
+  }
+  $('title').textContent = `All GPS data · ${trackerId}`;
+  document.title = `${trackerId} · All GPS data · Drone Tag`;
+
+  function render() {
+    const active = filter.date || filter.from || filter.to;
+    const shown = points.filter(p => !active || DT.matchesFilter(DT.recTime(p), filter));
+    $('count').textContent = active ? `${shown.length} of ${points.length} records` : `${points.length} record${points.length === 1 ? '' : 's'}`;
+    if (!points.length) { $('rows').innerHTML = empty(`No GPS records from ${DT.esc(trackerId)} yet.`); return; }
+    if (!shown.length) { $('rows').innerHTML = empty('No records match this date and time. Change or reset the filter.'); return; }
+    $('rows').innerHTML = shown.map(p => `
+      <tr><td class="num">${p.lat.toFixed(6)}</td><td class="num">${p.lon.toFixed(6)}</td>
+        <td class="num">${p.altitude ? DT.esc(p.altitude) : '--'}</td>
+        <td>${DT.ist(DT.recTime(p))}${p.timeSource === 'server' ? ' <span class="src">(received)</span>' : ''}</td></tr>`).join('');
+  }
+
+  async function load() {
+    DT.setStatus($('status'), '');
+    const res = await DT.api('/api/data/' + encodeURIComponent(trackerId));
+    bar.setTrackers(res.body.trackers);
+    if (res.status === 404) { points = []; render(); return; }
+    if (!res.ok) { DT.setStatus($('status'), 'Could not load the GPS records. Try Refresh.', 'err'); $('rows').innerHTML = ''; return; }
+    points = (res.body.points || [])
+      .filter(p => String(p.trackerId).toLowerCase() === trackerId.toLowerCase() && Number.isFinite(p.lat) && Number.isFinite(p.lon))
+      .sort((a, b) => String(DT.recTime(b)).localeCompare(String(DT.recTime(a))) || b.seq - a.seq);
+    render();
+  }
+
+  $('refresh').addEventListener('click', load);
+  await load();
+})();
+</script>
+</body>
+</html>

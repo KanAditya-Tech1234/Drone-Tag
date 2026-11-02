@@ -34,20 +34,6 @@
     <h2 class="section-title">Drones</h2>
     <div id="tracker-list" class="tracker-list"></div>
   </section>
-
-  <section class="card">
-    <h2 class="section-title">Device settings</h2>
-    <div class="actions">
-      <label class="field" style="min-width:220px">Transmission delay (all devices)
-        <select id="delay">
-          <option value="1000">1 second</option><option value="2000">2 seconds</option><option value="5000">5 seconds</option>
-          <option value="10000">10 seconds</option><option value="15000">15 seconds</option><option value="30000">30 seconds</option><option value="60000">60 seconds</option>
-        </select>
-      </label>
-      <button class="btn btn-danger" id="clear-btn">Clear all data</button>
-      <div id="settings-status" class="hidden"></div>
-    </div>
-  </section>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="/js/common.js"></script>
@@ -178,7 +164,6 @@
     const res = await DT.api('/api/data');
     if (res.ok) {
       data = { points: res.body.points || [], photos: res.body.photos || [], trackers: res.body.trackers || [], status: res.body.trackerStatus || [] };
-      $('delay').value = String(res.body.intervalMs);
       $('updated-chip').textContent = 'Updated ' + DT.ist(new Date()).slice(11);
       render();
     } else {
@@ -192,20 +177,6 @@
     fitted = false; render();
   });
   $('f-search').addEventListener('keydown', e => { if (e.key === 'Enter') { fitted = false; render(); } });
-
-  // Device settings: same POST /api/data the old dashboard used.
-  const settingsStatus = $('settings-status');
-  $('delay').addEventListener('change', async () => {
-    const res = await DT.api('/api/data', { method: 'POST', body: JSON.stringify({ intervalMs: Number($('delay').value) }) });
-    DT.setStatus(settingsStatus, res.ok ? `Delay set to ${Number($('delay').value) / 1000} s` : (res.body.message || 'Could not change the delay'), res.ok ? 'ok' : 'err');
-  });
-  $('clear-btn').addEventListener('click', async () => {
-    if (!confirm('Delete ALL positions, images, telemetry and configuration files of every drone? This cannot be undone.')) return;
-    const res = await DT.api('/api/data', { method: 'POST', body: JSON.stringify({ action: 'reset' }) });
-    DT.setStatus(settingsStatus, res.ok ? 'All data cleared' : (res.body.message || 'Could not clear'), res.ok ? 'ok' : 'err');
-    fitted = false;
-    refresh();
-  });
 
   await refresh();
   setInterval(refresh, 5000);

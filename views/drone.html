@@ -12,26 +12,25 @@
 <div id="app-header"></div>
 <main class="page stack">
   <div class="page-head">
-    <div><h1>Drone dashboard</h1><p class="muted">Flight path, live position and images of one drone. Times are Indian Standard Time.</p></div>
+    <div><h1 id="title">Drone dashboard</h1><p class="muted">Live position, flight path, images and GPS records of one drone. Times are Indian Standard Time.</p></div>
     <div class="chips"><span class="chip hidden" id="track-chip"></span><span class="chip alt" id="updated">–</span></div>
   </div>
 
-  <section class="card">
-    <form class="actions" id="search-form">
-      <label class="field grow">Tracker ID <input id="tracker" placeholder="Enter a Tracker ID, e.g. DRONE-01" autocapitalize="characters"></label>
-      <button class="btn btn-primary" type="submit" id="fetch-btn">Show drone</button>
-      <button class="btn btn-accent" type="button" id="csv-btn">Export CSV</button>
-      <button class="btn btn-outline" type="button" id="zip-btn">Export images</button>
-    </form>
-    <div id="status" class="hidden" style="margin-top:12px"></div>
-  </section>
+  <div id="drone-bar"></div>
+  <div id="status" class="hidden"></div>
 
   <section class="card">
-    <h2 class="section-title">Drone details</h2>
+    <div class="page-head" style="margin-bottom:10px">
+      <h2 class="section-title" style="margin:0">Drone details</h2>
+      <div class="actions">
+        <button class="btn btn-accent" type="button" id="csv-btn">Export CSV</button>
+        <button class="btn btn-outline" type="button" id="zip-btn">Export images</button>
+      </div>
+    </div>
     <div class="table-wrap">
       <table class="info">
         <thead><tr><th>Tracker ID</th><th>Drone UIN</th><th>Category</th><th>Application</th><th>Autonomy</th><th>Range</th><th>Owner</th></tr></thead>
-        <tbody id="info-body"><tr><td colspan="7" class="muted">Enter a Tracker ID to load a drone.</td></tr></tbody>
+        <tbody id="info-body"><tr><td colspan="7" class="muted">Choose a drone above.</td></tr></tbody>
       </table>
     </div>
     <div class="chips" id="stats" style="margin-top:12px"></div>
@@ -40,22 +39,38 @@
   <section class="stack" style="gap:10px">
     <div class="page-head">
       <div><h2 class="section-title" style="margin:0">Flight path</h2><p class="muted" id="track-note" style="font-size:13.5px"></p></div>
-      <label class="field" style="min-width:min(100%,320px)">Flight <select id="session"><option value="">Latest flight</option></select></label>
+      <div class="actions">
+        <label class="field" style="min-width:min(100%,300px)">Flight <select id="session"><option value="">Latest flight</option></select></label>
+        <button class="btn btn-outline side-toggle" id="side-toggle" type="button" aria-expanded="false" aria-controls="img-side">
+          Images <span class="count" id="side-count">0</span>
+        </button>
+      </div>
     </div>
-    <div id="map" class="map"></div>
+    <div class="map-wrap" id="map-wrap">
+      <div id="map" class="map"></div>
+      <aside class="img-side" id="img-side" aria-label="Images of this drone" hidden>
+        <div class="img-side-head">
+          <h2>Images</h2>
+          <a class="btn btn-outline" id="all-images" href="/images">All Images</a>
+        </div>
+        <div class="side-list" id="side-list"><div class="side-empty">No images from this drone yet.</div></div>
+      </aside>
+    </div>
   </section>
 
-  <section>
-    <div class="page-head" style="margin-bottom:10px"><h2 class="section-title" style="margin:0">Images</h2><span class="muted" id="img-count"></span></div>
-    <div id="images" class="images-grid"><div class="empty">Images of the drone appear here.</div></div>
+  <section class="stack" style="gap:10px">
+    <div class="page-head">
+      <div><h2 class="section-title" style="margin:0">GPS data</h2><p class="muted" id="gps-note" style="font-size:13.5px">Newest first. Scroll the table for older records.</p></div>
+      <a class="btn btn-outline" id="all-data" href="/data">All Data</a>
+    </div>
+    <div class="gps-wrap five">
+      <table class="gps">
+        <thead><tr><th class="num">Latitude</th><th class="num">Longitude</th><th class="num">Altitude</th><th>Time (IST)</th></tr></thead>
+        <tbody id="gps-body"><tr class="empty-row"><td colspan="4">Choose a drone to see its GPS records.</td></tr></tbody>
+      </table>
+    </div>
   </section>
 </main>
-
-<div class="lightbox" id="lightbox" role="dialog" aria-label="Image">
-  <img id="lb-img" alt="Drone image">
-  <div class="cap" id="lb-cap"></div>
-  <div class="row"><a class="btn btn-accent" id="lb-open" target="_blank" rel="noopener">Open original</a><button class="btn btn-outline" id="lb-close" type="button">Close</button></div>
-</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="/js/common.js"></script>
@@ -64,6 +79,8 @@
   const me = await DT.header('drone');
   const $ = id => document.getElementById(id);
   const REFRESH_MS = 5000;
+  const GPS_ROWS = 100;            // rows kept in the dashboard table; All Data shows everything
+  const viewer = DT.lightbox();
 
   // ---- map: one path line and at most one start pin, one arrow and one end pin ----
   const map = L.map('map').setView([22.6, 72.5], 7);
@@ -99,7 +116,12 @@
 
   let current = '';
   let chosen = '';            // '' = always follow the latest flight
-  let photosKey = '';
+  let loading = false;
+
+  const bar = DT.droneBar($('drone-bar'), {
+    active: 'dashboard',
+    onSelect: id => { load(id); },
+  });
 
   function renderInfo(id, drone) {
     const cell = v => `<td>${v ? DT.esc(v) : '<span class="muted">–</span>'}</td>`;
@@ -139,7 +161,7 @@
       dots.clearLayers();
       pts.slice(1, -1).forEach(p => {
         L.circleMarker([p.lat, p.lon], { radius: 3.5, color: '#b45309', weight: 1.5, fillColor: '#fff', fillOpacity: 1 })
-          .addTo(dots).bindPopup(DT.mapPopup(id, p.receivedAt));
+          .addTo(dots).bindPopup(DT.mapPopup(id, DT.recTime(p)));
       });
       dotsKey = key;
     }
@@ -175,28 +197,83 @@
     return { s, pts };
   }
 
-  function renderImages(id, photos) {
-    $('img-count').textContent = photos.length ? `${photos.length} image${photos.length === 1 ? '' : 's'}, newest first` : '';
-    if (!photos.length) { $('images').innerHTML = '<div class="empty">No images from this drone yet.</div>'; return; }
-    $('images').innerHTML = photos.slice().reverse().map(p => `
-      <figure class="img-card" style="margin:0">
-        <button type="button" data-src="${DT.esc(p.url)}" data-cap="${DT.esc(id)} · ${DT.ist(p.receivedAt)}">
-          <img src="${DT.esc(p.url)}" alt="Image from ${DT.esc(id)}" loading="lazy">
-        </button>
-        <figcaption class="cap"><b>${DT.esc(id)}</b><br><span class="muted">${DT.ist(p.receivedAt)}</span></figcaption>
-      </figure>`).join('');
+  // ---- image sidebar: newest at the top; new images are added without redrawing the rest ----
+  let shownImages = [];   // ids, newest first
+  function renderSidebar(id, photos) {
+    const list = $('side-list');
+    const newest = photos.slice().reverse();
+    $('side-count').textContent = newest.length;
+    if (!newest.length) {
+      list.innerHTML = '<div class="side-empty">No images from this drone yet.</div>';
+      shownImages = [];
+      return;
+    }
+    const ids = newest.map(p => p.id);
+    const item = (p, isNew) => `
+      <button type="button" class="side-item${isNew ? ' new' : ''}" data-id="${DT.esc(p.id)}" data-src="${DT.esc(p.url)}" data-cap="${DT.esc(id)} · ${DT.ist(DT.recTime(p))}">
+        <img src="${DT.esc(p.url)}" alt="Image from ${DT.esc(id)}" loading="lazy">
+        <span class="meta"><b>${DT.esc(id)}</b>${DT.ist(DT.recTime(p)).slice(0, 10)}<br>${DT.ist(DT.recTime(p)).slice(11)}</span>
+      </button>`;
+    const unchangedTail = shownImages.length && ids.slice(ids.length - shownImages.length).join('|') === shownImages.join('|');
+    if (unchangedTail) {
+      // Only new images arrived: put them on top, keep the rest (and the scroll position).
+      const added = newest.slice(0, ids.length - shownImages.length);
+      if (added.length) list.insertAdjacentHTML('afterbegin', added.map(p => item(p, true)).join(''));
+    } else {
+      list.innerHTML = newest.map(p => item(p, false)).join('');
+    }
+    shownImages = ids;
+  }
+  $('side-list').addEventListener('click', e => {
+    const btn = e.target.closest('.side-item');
+    if (btn) viewer.open(btn.dataset.src, btn.dataset.cap);
+  });
+  $('side-toggle').addEventListener('click', () => {
+    const open = $('map-wrap').classList.toggle('side-open');
+    $('img-side').hidden = !open;
+    $('side-toggle').setAttribute('aria-expanded', String(open));
+    $('side-toggle').classList.toggle('on', open);
+    // The map gets narrower / wider: let Leaflet re-measure it, keeping the same centre.
+    const centre = map.getCenter();
+    map.invalidateSize({ animate: false });
+    map.setView(centre, map.getZoom(), { animate: false });
+  });
+
+  // ---- GPS table: newest first, five rows visible, older rows scroll ----
+  let gpsKey = '';
+  function renderGps(points) {
+    const key = `${points.length}|${points.length ? points[points.length - 1].seq : 0}`;
+    if (key === gpsKey) return;
+    gpsKey = key;
+    const rows = points.filter(validFix).slice(-GPS_ROWS).reverse();
+    $('gps-body').innerHTML = rows.length ? rows.map(p => `
+      <tr><td class="num">${p.lat.toFixed(6)}</td><td class="num">${p.lon.toFixed(6)}</td>
+        <td class="num">${p.altitude ? DT.esc(p.altitude) : '--'}</td>
+        <td>${DT.ist(DT.recTime(p))}${p.timeSource === 'server' ? ' <span class="src" title="The drone sent no usable time; this is when the server received it.">(received)</span>' : ''}</td></tr>`).join('')
+      : '<tr class="empty-row"><td colspan="4">No GPS records from this drone yet.</td></tr>';
+    const all = points.filter(validFix).length;
+    $('gps-note').textContent = all > GPS_ROWS
+      ? `Newest first. The latest ${GPS_ROWS} of ${all} records; use All Data for the rest.`
+      : 'Newest first. Scroll the table for older records.';
   }
 
   async function load(id, { quiet = false } = {}) {
-    id = id.trim();
-    if (!id) { DT.setStatus($('status'), 'Enter a Tracker ID.', 'warn'); return; }
+    id = String(id || '').trim();
+    if (!id) return;
     if (id.toLowerCase() !== current.toLowerCase()) {
       clearTrack();
       fittedFor = '';
       chosen = '';
-      photosKey = '';
+      gpsKey = '';
+      shownImages = [];
+      $('side-list').innerHTML = '<div class="side-empty">Loading…</div>';
+      bar.setTracker(id);
     }
     current = id;
+    document.title = `${id} · Drone dashboard · Drone Tag`;
+    $('title').textContent = `Drone ${id}`;
+    $('all-images').href = '/images?tracker=' + encodeURIComponent(id);
+    $('all-data').href = '/data?tracker=' + encodeURIComponent(id);
     if (!quiet) DT.setStatus($('status'), `Loading ${id}…`, 'info');
     history.replaceState(null, '', '/drone?tracker=' + encodeURIComponent(id));
 
@@ -204,14 +281,16 @@
     if (id !== current) return;   // another drone was chosen meanwhile
     const drone = regRes.ok ? regRes.body.drones.find(d => d.trackerId.toLowerCase() === id.toLowerCase()) : null;
     renderInfo(id, drone);
+    bar.setTrackers(dataRes.body.trackers);
 
     if (!dataRes.ok) {
       clearTrack();
       fillSessions([]);
       $('track-chip').className = 'chip hidden';
       $('track-note').textContent = '';
-      renderImages(id, []);
-      photosKey = '';
+      renderSidebar(id, []);
+      gpsKey = '';
+      renderGps([]);
       $('stats').innerHTML = '';
       $('updated').textContent = 'Checked ' + DT.ist(new Date()).slice(11);
       DT.setStatus($('status'), dataRes.status === 404 ? `No data from ${id} yet. Make sure the drone tag sends this exact Tracker ID.` : 'Could not load the data. Retrying automatically.', dataRes.status === 404 ? 'warn' : 'err');
@@ -220,22 +299,23 @@
     const body = dataRes.body;
     const photos = body.photos || [];
     const track = renderTrack(id, body);
-    // Images are redrawn only when they change, so the page does not jump while you scroll.
-    const key = photos.length + '|' + (photos.length ? photos[photos.length - 1].id : '');
-    if (key !== photosKey) { renderImages(id, photos); photosKey = key; }
+    renderSidebar(id, photos);
+    renderGps(body.points || []);
 
     const s = track && track.s;
+    const flights = (body.sessions || []).length;
     $('stats').innerHTML = `
-      <span class="chip">${(body.sessions || []).length} flight${(body.sessions || []).length === 1 ? '' : 's'}</span>
+      <span class="chip">${flights} flight${flights === 1 ? '' : 's'}</span>
       <span class="chip">${track ? track.pts.length : 0} positions in this flight</span>
       <span class="chip alt">${photos.length} images</span>
+      <span class="chip">Sends every ${DT.formatInterval(body.intervalMs)}</span>
       ${s ? `<span class="chip">Started ${DT.ist(s.startedAt)}</span><span class="chip">Last seen ${DT.ist(s.lastSeenAt)}</span>` : ''}`;
     $('updated').textContent = 'Updated ' + DT.ist(new Date()).slice(11);
-    if (!quiet) DT.setStatus($('status'), `Showing ${id}: ${(body.sessions || []).length} flight(s) and ${photos.length} images.`, 'ok');
+    if (!quiet) DT.setStatus($('status'), '');
   }
 
   async function download(kind) {
-    if (!current) return DT.setStatus($('status'), 'Load a drone first.', 'warn');
+    if (!current) return DT.setStatus($('status'), 'Choose a drone first.', 'warn');
     const url = `/api/export/${encodeURIComponent(current)}/${kind === 'csv' ? 'csv' : 'images.zip'}`;
     // Check first so a missing export shows a message instead of a broken download.
     const head = await fetch(url, { method: 'HEAD', credentials: 'same-origin' });
@@ -243,7 +323,6 @@
     location.href = url;
   }
 
-  $('search-form').addEventListener('submit', e => { e.preventDefault(); load($('tracker').value); });
   $('csv-btn').addEventListener('click', () => download('csv'));
   $('zip-btn').addEventListener('click', () => download('zip'));
   $('session').addEventListener('change', () => {
@@ -253,25 +332,19 @@
     if (current) load(current, { quiet: true });
   });
 
-  // Image viewer
-  $('images').addEventListener('click', e => {
-    const btn = e.target.closest('button[data-src]');
-    if (!btn) return;
-    $('lb-img').src = btn.dataset.src;
-    $('lb-open').href = btn.dataset.src;
-    $('lb-cap').textContent = btn.dataset.cap;
-    $('lightbox').classList.add('open');
-  });
-  const closeBox = () => $('lightbox').classList.remove('open');
-  $('lb-close').addEventListener('click', closeBox);
-  $('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeBox(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBox(); });
-
-  // Start with ?tracker=…, or the signed-in user's own drone. Then refresh by itself.
-  const start = new URLSearchParams(location.search).get('tracker') || (me && me.drone.trackerId) || '';
-  $('tracker').value = start;
+  // Start with ?tracker=…, else the signed-in user's own drone, else the most recently active drone.
+  let start = new URLSearchParams(location.search).get('tracker') || (me && me.drone.trackerId) || '';
+  if (!start) {
+    const all = await DT.api('/api/data');
+    if (all.ok && all.body.trackers && all.body.trackers.length) start = all.body.trackers[all.body.trackers.length - 1];
+  }
   if (start) await load(start);
-  setInterval(() => { if (current) load(current, { quiet: true }); }, REFRESH_MS);
+  else DT.setStatus($('status'), 'No drone has sent data yet, and you have not registered a drone.', 'warn');
+  setInterval(async () => {
+    if (!current || loading) return;
+    loading = true;
+    try { await load(current, { quiet: true }); } finally { loading = false; }
+  }, REFRESH_MS);
 })();
 </script>
 </body>

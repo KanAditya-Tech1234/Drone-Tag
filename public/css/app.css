@@ -200,3 +200,76 @@ details.faq summary { font-weight: 700; cursor: pointer; color: var(--forest); }
 @media (max-width: 420px) {
   .actions .btn { flex-basis: 100%; }
 }
+
+/* ---------- drone navigation bar ---------- */
+.drone-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 10px 14px;
+}
+.drone-pick { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--forest); }
+.drone-pick select { width: auto; min-width: 190px; font-weight: 700; }
+.drone-tabs { display: flex; gap: 4px; flex-wrap: wrap; flex: 1 1 auto; }
+.drone-tabs a { text-decoration: none; color: var(--forest); font-weight: 700; font-size: 14px; padding: 8px 14px; border-radius: 999px; }
+.drone-tabs a:hover { background: var(--green-soft); }
+.drone-tabs a.active { background: var(--forest); color: #fff; }
+
+/* ---------- settings window ---------- */
+dialog.modal { border: none; border-radius: 16px; padding: 22px; width: min(440px, calc(100vw - 32px)); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3); color: var(--text); }
+dialog.modal::backdrop { background: rgba(8, 25, 18, 0.55); }
+
+/* ---------- map with the image sidebar ---------- */
+/* The sidebar sits BESIDE the map (the map gets narrower), never on top of it. */
+.map-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.map-wrap.side-open { grid-template-columns: minmax(0, 1fr) 340px; }
+.map-wrap .map { height: 70vh; min-height: 480px; }
+.side-toggle .count { background: var(--saffron); color: var(--forest); border-radius: 999px; padding: 0 8px; font-size: 12px; line-height: 1.6; }
+.side-toggle.on { background: var(--forest); color: #fff; border-color: var(--forest); }
+.img-side {
+  height: 70vh; min-height: 480px; min-width: 0; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden;
+}
+.img-side[hidden] { display: none; }
+.img-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.img-side-head h2 { font-size: 16px; margin: 0; }
+.img-side-head .btn { min-height: 34px; padding: 5px 12px; font-size: 13px; }
+/* Exactly four images fit the visible area; the rest scroll. */
+.side-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px; }
+.side-item {
+  flex: 0 0 calc((100% - 30px) / 4); min-height: 0; display: grid; grid-template-columns: 44% 1fr; gap: 10px; align-items: center;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 6px; cursor: zoom-in; text-align: left; font: inherit; color: inherit;
+}
+.side-item:hover { border-color: var(--green); background: var(--green-soft); }
+.side-item img { width: 100%; height: 100%; max-height: 100%; object-fit: cover; border-radius: 8px; background: #dfe6e1; min-height: 0; }
+.side-item .meta { font-size: 12.5px; line-height: 1.45; min-width: 0; }
+.side-item .meta b { color: var(--forest); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-item.new { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: var(--saffron-soft); } to { background: #fff; } }
+.side-empty { margin: auto; padding: 20px; text-align: center; color: var(--muted); }
+
+/* ---------- GPS tables ---------- */
+.gps-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.gps-wrap.five { max-height: 262px; }          /* header + five rows (and a sliver of the sixth); older rows scroll */
+.gps-wrap.tall { max-height: 68vh; }
+table.gps { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+table.gps th {
+  position: sticky; top: 0; z-index: 1; background: var(--saffron-soft); color: var(--saffron-dark); text-align: left;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; padding: 10px 14px; white-space: nowrap;
+}
+table.gps td { padding: 10px 14px; border-top: 1px solid var(--border); white-space: nowrap; font-weight: 600; height: 42px; }
+table.gps tbody tr:first-child td { border-top: none; }
+table.gps tbody tr:hover td { background: #fafaf6; }
+table.gps .num { text-align: right; }
+table.gps th.num { text-align: right; }
+table.gps .src { color: var(--muted); font-weight: 500; font-size: 12px; }
+.empty-row td { text-align: center; color: var(--muted); font-weight: 500; padding: 26px 12px; height: auto; }
+
+@media (max-width: 720px) {
+  .drone-bar { padding: 10px; }
+  .drone-pick { width: 100%; }
+  .drone-pick select { flex: 1; min-width: 0; }
+  .interval-btn { width: 100%; }
+  .map-wrap .map { height: 62vh; min-height: 420px; }
+  /* Phones: the sidebar opens below the map instead of beside it. */
+  .map-wrap.side-open { grid-template-columns: minmax(0, 1fr); }
+  .img-side { height: 520px; min-height: 0; }
+}

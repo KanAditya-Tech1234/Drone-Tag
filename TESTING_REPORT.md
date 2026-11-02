@@ -103,3 +103,11 @@ Browser check (local server, test data only, offline window shortened to 20 s by
 - New data after the silence started Flight 2 (live, own start, arrow at 90° for an eastward track); Flight 1 kept its start and end and can be picked in the "Flight" selector.
 - Live map overview: "1 live" chip, path, start pin and arrow per drone, Live / Ended badge on the drone cards.
 - Legend inside the bottom-left corner of both maps at all widths; no page scrolls sideways at 375, 768 or 1280 px; no console errors.
+
+## Image sidebar, GPS table, All Images / All Data, per-drone interval, 5-minute end (2 Nov 2026)
+
+`npm test`: **33 of 33 pass** (25 earlier + 8 new: 5 API tests for per-drone intervals and recorded times, 3 unit tests for device time handling in `test/time.test.js`). The earlier session test now checks the 5-minute default.
+
+API tests: CAM-01 = 5 s and CAM-02 = 15 s each get their own `intervalMs` back from JSON, form-data and raw-image uploads, telemetry and config uploads; an unconfigured drone gets the default; changing CAM-01 or the default leaves CAM-02 unchanged; the setting is written to `config.json` and read back by a fresh `loadConfig()`; an old `config.json` with only `intervalMs` still loads; bad values / Tracker IDs are refused; login is required.
+
+Browser check (local server, test data only): drone selector and tabs; sidebar closed by default, opens and closes, exactly 4 images visible, the rest scroll, newest first, a new upload appears on top without reloading; GPS table right under the map with exactly 5 rows visible, newest first, `--` for missing altitude, device IST time used (not shifted again), "(received)" when the drone sent no time; Transmission interval window: shows the current value, saves 15 s with a success message, rejects 0 with an error; upload replies then gave CAM-01 15000 and CAM-02 5000; after a server restart CAM-01 still got 15000. All Images and All Data: only the chosen drone, newest first, date / time filter, empty and error messages, reset, image preview. No sideways scrolling at 375, 768 and 1280 px; map controls stay visible with the sidebar open; no console errors.

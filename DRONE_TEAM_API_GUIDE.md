@@ -25,7 +25,7 @@ None. Devices send data, and anyone reads it, **without any key or token**. Olde
 
 ### Response format
 
-Every JSON reply has `"status": "ok"` or `"status": "error"` plus a `message` when something is wrong. Upload replies always include **`intervalMs`**: the delay chosen on the dashboard. Wait that long (start to start) before your next upload.
+Every JSON reply has `"status": "ok"` or `"status": "error"` plus a `message` when something is wrong. Upload replies always include **`intervalMs`**: the delay chosen on the dashboard **for that Tracker ID** (each drone can have its own; drones without one get the default). Wait that long (start to start) before your next upload. Keep reading it from every reply, as the sketches already do: a change on the dashboard reaches the drone with its next reply.
 
 ---
 

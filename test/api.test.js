@@ -10,7 +10,7 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'drone-tag-test-'));
 process.env.DATA_DIR = DATA_DIR;
 process.env.CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 
-const { start } = require('../server');
+const { start, loadConfig } = require('../server');
 const JPEG = fs.readFileSync(path.join(__dirname, '..', 'postman', 'sample-photo.jpg'));
 
 let server;
@@ -22,8 +22,9 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => {
+after(async () => {
   server.close();
+  await new Promise(resolve => setTimeout(resolve, 500));   // let the batched db.json save finish
   fs.rmSync(DATA_DIR, { recursive: true, force: true });
 });
 
@@ -61,7 +62,8 @@ test('reads include tracking sessions; out-of-range coordinates are refused', as
   assert.equal(one.session.start.lat, 23.0);
   assert.equal(one.session.current.lat, 23.001);
   assert.equal(one.session.end, null);
-  assert.ok(one.offlineAfterMs >= 120000);
+  assert.equal(one.offlineAfterMs, 300000);          // default: a flight ends after 5 minutes of silence
+  assert.match(one.points[0].recordedAt, /^\d{4}-/);
   const all = await (await fetch(`${base}/api/data`)).json();
   assert.equal(all.trackerStatus.find(t => t.trackerId === 'SES-01').session.status, 'live');
 });
@@ -286,4 +288,90 @@ test('logout ends the session cookie; repeated wrong logins are blocked', async 
   let last;
   for (let i = 0; i < 11; i++) last = await postJson('/auth/login', { phone: ACCOUNT.phone, password: 'Wrong1234' });
   assert.equal(last.status, 429);
+});
+
+// ---------------------------------------------------------------------
+// Per-drone transmission interval (each drone gets its own "intervalMs" back)
+// ---------------------------------------------------------------------
+const putInterval = (id, intervalMs, cookie = session) => fetch(`${base}/api/interval/${id}`, {
+  method: 'PUT', headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+  body: JSON.stringify({ intervalMs }),
+});
+
+test('per-drone interval: login needed, values and Tracker IDs validated', async () => {
+  assert.equal((await putInterval('CAM-01', 5000, null)).status, 401);
+  assert.equal((await fetch(`${base}/api/interval/CAM-01`)).status, 401);
+  for (const bad of [999, 300001, 1500.5, '5000', true]) assert.equal((await putInterval('CAM-01', bad)).status, 400, String(bad));
+  assert.equal((await putInterval('bad id!', 5000)).status, 400);
+});
+
+test('each drone receives its own interval in every upload reply', async () => {
+  assert.equal((await postJson('/api/data', { intervalMs: 10000 })).status, 200);   // the default
+  const one = await (await putInterval('CAM-01', 5000)).json();
+  assert.deepEqual([one.intervalMs, one.custom, one.defaultIntervalMs], [5000, true, 10000]);
+  assert.equal((await (await putInterval('CAM-02', 15000)).json()).intervalMs, 15000);
+
+  const gps = async id => (await (await postJson('/api/data', { TrackerId: id, Latitude: 23.05, Longitude: 72.52 })).json()).intervalMs;
+  assert.equal(await gps('CAM-01'), 5000);
+  assert.equal(await gps('cam-01'), 5000);            // Tracker IDs ignore case
+  assert.equal(await gps('CAM-02'), 15000);
+  assert.equal(await gps('CAM-09'), 10000);           // no own setting: the default
+
+  const raw = await fetch(`${base}/api/data?trackerId=CAM-02&lat=23.05&lon=72.52`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: JPEG });
+  assert.equal((await raw.json()).intervalMs, 15000);
+  const form = new FormData();
+  form.append('TrackerId', 'CAM-01');
+  form.append('image', new Blob([JPEG], { type: 'image/jpeg' }), 'photo.jpg');
+  assert.equal((await (await fetch(`${base}/api/data`, { method: 'POST', body: form })).json()).intervalMs, 5000);
+  const tel = await postJson('/api/telemetry', { TrackerId: 'CAM-02', BatteryPercent: 80 });
+  assert.equal((await tel.json()).intervalMs, 15000);
+  const cfg = await fetch(`${base}/api/config?trackerId=CAM-01&filename=p.txt`, { method: 'POST', body: 'A=1' });
+  assert.equal((await cfg.json()).intervalMs, 5000);
+  assert.equal((await (await fetch(`${base}/api/data/CAM-02`)).json()).intervalMs, 15000);
+
+  // Changing CAM-01 leaves CAM-02 alone; changing the default keeps both.
+  await putInterval('CAM-01', 30000);
+  assert.equal(await gps('CAM-02'), 15000);
+  assert.equal(await gps('CAM-01'), 30000);
+  await postJson('/api/data', { intervalMs: 20000 });
+  assert.equal(await gps('CAM-01'), 30000);
+  assert.equal(await gps('CAM-09'), 20000);
+});
+
+test('per-drone intervals are saved and survive a restart; old config files still load', () => {
+  const saved = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, 'utf8'));
+  assert.deepEqual(saved.trackerIntervalsMs, { 'CAM-01': 30000, 'CAM-02': 15000 });
+  const reloaded = loadConfig();                     // what a restarted server reads
+  assert.equal(reloaded.intervalMs, 20000);
+  assert.deepEqual(reloaded.trackerIntervalsMs, { 'CAM-01': 30000, 'CAM-02': 15000 });
+
+  const original = fs.readFileSync(process.env.CONFIG_PATH);
+  try {
+    fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify({ intervalMs: 7000 }));
+    assert.deepEqual(loadConfig(), { intervalMs: 7000, trackerIntervalsMs: {} });
+    fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify({ intervalMs: 7000, trackerIntervalsMs: { 'OK-1': 4000, 'bad id': 4000, 'OK-2': 5 } }));
+    assert.deepEqual(loadConfig().trackerIntervalsMs, { 'OK-1': 4000 });
+  } finally {
+    fs.writeFileSync(process.env.CONFIG_PATH, original);
+  }
+});
+
+test('a drone can go back to the default interval', async () => {
+  const res = await (await putInterval('cam-01', null)).json();
+  assert.deepEqual([res.intervalMs, res.custom], [20000, false]);
+  const gps = await postJson('/api/data', { TrackerId: 'CAM-01', Latitude: 23.05, Longitude: 72.52 });
+  assert.equal((await gps.json()).intervalMs, 20000);
+  assert.deepEqual(JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, 'utf8')).trackerIntervalsMs, { 'CAM-02': 15000 });
+});
+
+test('GPS records carry the time they were recorded (device IST time, else arrival)', async () => {
+  await postJson('/api/data', { TrackerId: 'TIME-1', Latitude: 23.05, Longitude: 72.52, Timestamp: '2020-01-01 00:00:00' });
+  const now = new Date(Date.now() - 60000);
+  const ist = new Date(now.getTime() + 330 * 60000).toISOString().slice(0, 19).replace('T', ' ');   // firmware format, already IST
+  await postJson('/api/data', { TrackerId: 'TIME-1', Latitude: 23.06, Longitude: 72.52, Timestamp: ist });
+  const { points } = await (await fetch(`${base}/api/data/TIME-1`)).json();
+  assert.equal(points[0].timeSource, 'server');            // too old to believe
+  assert.equal(points[0].recordedAt, points[0].receivedAt);
+  assert.equal(points[1].timeSource, 'device');
+  assert.equal(points[1].recordedAt, new Date(Math.floor(now.getTime() / 1000) * 1000).toISOString());
 });

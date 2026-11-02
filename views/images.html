@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All images · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack">
+  <div class="page-head">
+    <div><h1 id="title">All images</h1><p class="muted">Every image this drone has sent that the server still keeps, newest first. Times are Indian Standard Time.</p></div>
+    <div class="chips"><span class="chip alt" id="count">–</span><button class="btn btn-outline" id="refresh" type="button">Refresh</button></div>
+  </div>
+  <div id="drone-bar"></div>
+  <section class="card" id="filter"></section>
+  <div id="status" class="hidden"></div>
+  <div id="images" class="images-grid"><div class="empty">Loading images…</div></div>
+  <p class="muted" style="font-size:13px;margin:0">The server keeps the latest 500 images of all drones together; older ones are removed automatically.</p>
+</main>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await DT.header('drone');
+  const $ = id => document.getElementById(id);
+  const trackerId = new URLSearchParams(location.search).get('tracker') || '';
+  const bar = DT.droneBar($('drone-bar'), { trackerId, active: 'images' });
+  const viewer = DT.lightbox();
+  let photos = [];          // newest first
+  let filter = { date: '', from: '', to: '' };
+  DT.filterBar($('filter'), f => { filter = f; render(); });
+
+  if (!trackerId) {
+    $('images').innerHTML = '<div class="empty">Choose a drone above to see its images.</div>';
+    $('count').textContent = '–';
+    return;
+  }
+  $('title').textContent = `All images · ${trackerId}`;
+  document.title = `${trackerId} · All images · Drone Tag`;
+
+  function render() {
+    const active = filter.date || filter.from || filter.to;
+    const shown = photos.filter(p => !active || DT.matchesFilter(DT.recTime(p), filter));
+    $('count').textContent = active ? `${shown.length} of ${photos.length} images` : `${photos.length} image${photos.length === 1 ? '' : 's'}`;
+    if (!photos.length) { $('images').innerHTML = `<div class="empty">No images from ${DT.esc(trackerId)} yet.</div>`; return; }
+    if (!shown.length) { $('images').innerHTML = '<div class="empty">No images match this date and time. Change or reset the filter.</div>'; return; }
+    $('images').innerHTML = shown.map(p => `
+      <figure class="img-card" style="margin:0">
+        <button type="button" data-src="${DT.esc(p.url)}" data-cap="${DT.esc(trackerId)} · ${DT.ist(DT.recTime(p))}">
+          <img src="${DT.esc(p.url)}" alt="Image from ${DT.esc(trackerId)}" loading="lazy">
+        </button>
+        <figcaption class="cap"><b>${DT.esc(trackerId)}</b><br><span class="muted">${DT.ist(DT.recTime(p))}</span></figcaption>
+      </figure>`).join('');
+  }
+
+  async function load() {
+    DT.setStatus($('status'), '');
+    const res = await DT.api('/api/data/' + encodeURIComponent(trackerId));
+    bar.setTrackers(res.body.trackers);
+    if (res.status === 404) { photos = []; render(); return; }
+    if (!res.ok) { DT.setStatus($('status'), 'Could not load the images. Try Refresh.', 'err'); $('images').innerHTML = ''; return; }
+    // Only this drone's images (the server matches the Tracker ID without case).
+    photos = (res.body.photos || [])
+      .filter(p => String(p.trackerId).toLowerCase() === trackerId.toLowerCase())
+      .sort((a, b) => String(DT.recTime(b)).localeCompare(String(DT.recTime(a))));
+    render();
+  }
+
+  $('images').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-src]');
+    if (btn) viewer.open(btn.dataset.src, btn.dataset.cap);
+  });
+  $('refresh').addEventListener('click', load);
+  await load();
+})();
+</script>
+</body>
+</html>
