@@ -3,3 +3,22 @@ uploads/
 
 .env
 *.log
+
+# Local-only test login
+LOCAL_TEST_LOGIN.md
+
+# Swagger UI download cache for tools/build-offline-docs.js (rebuilt on demand)
+tools/.swagger-ui-cache/
+
+# Local-only (editor / Postman workspace / launch settings)
+.claude/
+.postman/
+postman/collections/
+postman/documents/
+postman/environments/
+postman/flows/
+postman/globals/
+postman/mocks/
+postman/specs/
+start-local.cmd
+Hosting_Report_*.pdf

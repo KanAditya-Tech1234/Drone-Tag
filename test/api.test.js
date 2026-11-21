@@ -68,6 +68,29 @@ test('reads include tracking sessions; out-of-range coordinates are refused', as
   assert.equal(all.trackerStatus.find(t => t.trackerId === 'SES-01').session.status, 'live');
 });
 
+test('reads include the distance flown per flight and per point', async () => {
+  // A 3-leg path: 0.001° north (~111 m), then ~102 m east, then ~111 m south.
+  for (const [lat, lon] of [[23.0, 72.5], [23.001, 72.5], [23.001, 72.501], [23.0, 72.501]]) {
+    await postJson('/api/data', { TrackerId: 'DIST-01', Latitude: lat, Longitude: lon });
+  }
+  const one = await (await fetch(`${base}/api/data/DIST-01`)).json();
+  const d = one.session.distance;
+  assert.ok(Math.abs(d.flownM - 324.8) < 2, `flown ${d.flownM}`);
+  assert.ok(Math.abs(d.straightLineM - 102.4) < 2, `straight ${d.straightLineM}`);
+  assert.ok(d.areaBox.widthM > 100 && d.areaBox.heightM > 110);
+  assert.deepEqual(one.points.map(p => Math.round(p.distanceFromStartM)), [0, 111, 214, 325]);
+  assert.ok(one.points.every(p => p.gpsJump === undefined));
+  // A bad fix 5 km away that comes straight back is marked and not counted.
+  await postJson('/api/data', { TrackerId: 'DIST-01', Latitude: 23.05, Longitude: 72.55 });
+  await postJson('/api/data', { TrackerId: 'DIST-01', Latitude: 23.0, Longitude: 72.5011 });
+  const after = await (await fetch(`${base}/api/data/DIST-01`)).json();
+  assert.equal(after.points[4].gpsJump, true);
+  assert.ok(Math.abs(after.session.distance.flownM - 324.8 - 10.2) < 2, `flown ${after.session.distance.flownM}`);
+  const all = await (await fetch(`${base}/api/data`)).json();
+  assert.ok(all.trackerStatus.find(t => t.trackerId === 'DIST-01').session.distance.flownM > 300);
+  assert.ok(all.points.filter(p => p.trackerId === 'DIST-01').every(p => typeof p.distanceFromStartM === 'number'));
+});
+
 test('dashboard settings work without a key', async () => {
   const ok = await postJson('/api/data', { intervalMs: 10000 });
   assert.equal(ok.status, 200);
@@ -261,6 +284,8 @@ test('CSV export uses IST and neutralises formulas', async () => {
   const csv = await res.text();
   const lines = csv.replace(/^\uFEFF/, '').trim().split(/\r?\n/);
   assert.match(lines[0], /^"tracker_id","date_time_ist","latitude","longitude"/);
+  assert.match(lines[0], /"distance_from_start_m"$/);
+  assert.match(lines[1], /,"?0"?$/);                  // first point of a flight: 0 m from the start
   assert.match(lines[1], /^"EXP-01","\d\d-\d\d-\d{4} \d\d:\d\d:\d\d",/);
   assert.ok(!/,"=HYPERLINK/.test(csv));
   assert.equal((await fetch(base + '/api/export/NOPE/csv', { headers: { Cookie: session } })).status, 404);

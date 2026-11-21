@@ -100,10 +100,80 @@ latitude -90..90 / longitude -180..180 are refused.
 - Account, settings (current password needed to change anything), help,
   support and about pages.
 
+### Distance covered in a flight
+
+The drone dashboard shows, for the flight on the map:
+
+| Tile | How it is worked out |
+|---|---|
+| **Distance flown** (the real answer) | The sum of every hop between consecutive GPS positions of the flight, each measured on the Earth's surface (haversine). Because it follows every position, zig-zags, turns and loops are all counted. |
+| Straight line start → end | Start to end directly. The shortest possible distance; equals the distance flown only for a perfectly straight flight. |
+| Start–end box | The rectangle with the start and end points at opposite corners (the "square from the start and end" method): its east–west side + north–south side. Ignores every turn in between, so it is only a rough estimate. |
+| Flight area box | The smallest rectangle around the whole flight: width × height and area (m², hectares, acres). Shows *where* the drone worked, not how far it flew. |
+
+GPS errors are handled so they do not inflate the distance (`lib/distance.js`):
+- **Jitter:** a hovering drone's position wobbles by a few metres. A move only counts once the drone is at least **3 m** from the last counted position.
+- **Bad fixes:** a position is skipped only when it jumps away faster than **50 m/s** (180 km/h), comes back just as fast, and lands within 20% of the jump from where it was. It is shown as a grey dot and marked `"gpsJump": true`. Sharp zig-zags that move on to a new place are always counted.
+- **Times:** speeds use the larger of the device-time gap and the arrival-time gap. A device repeating one `Timestamp`, or uploads arriving bunched together, cannot make a normal move look impossibly fast.
+- **Test data:** a hand-made flight sent faster than a drone can fly (for example 300 m out and straight back, 5 s apart) looks exactly like a GPS glitch and is skipped. Either send realistic `Timestamp`s, or start the server with `MAX_DRONE_SPEED_MPS=150` while testing.
+
+Each point's popup shows its **distance from the start**. The overview cards show the latest flight's distance. The CSV export has a `distance_from_start_m` column. Two checkboxes above the map draw the two boxes.
+
+**Measure part of a flight (custom start and end).** Pick any two points on the path:
+- **Click a point:** it becomes the **end** of the range, measured from the flight's start.
+- **Choose any start:** in a point's popup, **Set as start** makes it the start of the range; **Set as end** makes it the end. The two can be picked in either order.
+- **Use the flight's own ends:** the green start pin resets the range start to the flight's start; the red end pin / live arrow resets the end.
+
+While a range is chosen:
+- All four tiles cover only that part: distance flown in the range, straight line between its ends, its start–end box, and its area box (width × height).
+- Its area box is drawn on the map (blue, dashed) even if the checkbox is off.
+- The path between the two points is highlighted in blue. The range start has a green ring and the range end a blue ring.
+- The bar above the tiles shows the range, e.g. "point 8 (16:13:34) → point 20 (16:16:55)".
+
+The distance flown in a range is the difference of the two points' "distance from start", so ranges add up (A → B plus B → C = A → C). Bad GPS fixes (grey dots) cannot be picked and are never part of the area.
+
+To go back to the whole flight, use **Show whole flight** or press **Esc**. The range stays while the page refreshes. While a range is chosen, or a popup is open, the map no longer jumps to follow a live drone.
+
+The browser uses the same code as the server for this (`public/js/geo.js`, also used by `lib/distance.js`), so a range covering the whole flight gives exactly the whole-flight numbers.
+
+The accuracy depends on how often the drone sends its position. Corners cut between two uploads are not seen, so a shorter transmission interval gives a more exact distance.
+
+**API:** every session in `GET /api/data/<id>` (and `trackerStatus[].session` in `GET /api/data`) has a `distance` object:
+`flownM`, `straightLineM`, `startEndBox { eastWestM, northSouthM, alongSidesM }`, `areaBox { south, north, west, east, widthM, heightM, areaM2 }`, `durationSec`, `avgSpeedKmh`, `pointsUsed`, `ignoredSmallMoves`, `ignoredJumps`.
+Every point has `distanceFromStartM`. All earlier fields are unchanged.
+
+**Try it without a drone:** with the server running on port 4000,
+```bash
+node tools/simulate-flight.js
+```
+sends a zig-zag spraying flight (real length 675 m, with a hover and one bad GPS fix) as tracker `DEMO-01`. Open `http://localhost:4000/drone?tracker=DEMO-01`.
+```bash
+node tools/simulate-flight.js --pattern erratic
+```
+sends a messy test flight (tight back-and-forth legs, then a long run to the end; real length about 3.7 km) as `DEMO-02`, flown at a realistic 8 m/s. Each run prints the real path length next to the server's result.
+
 **Devices and the mobile app are unaffected:** `POST /api/data`, the telemetry
 and config APIs and `GET /api/data/<trackerId>` stay open without any login
 or key. Accounts are kept in `<DATA_DIR>/users.json` (passwords only as
 scrypt hashes). Set `SESSION_SECRET` so logins survive a restart.
+
+### Data packets (live table)
+
+Drones send packets `{ "id": "1005", "lat": 23.078143, "lon": 72.531243, "Alt": 16.5, "Alt_R": "AGL", "d_x": 0.32, "d_y": -0.18, "d_z": 0.19 }`
+(the earlier long names `long`, `Altitude`, `Altitude Reference`, `delta_x` ... still work) to
+`POST /api/packet` (one packet, or up to 100 in a JSON array). They are stored in `db.json` (the newest 5,000)
+and read back with `GET /api/packet` / `GET /api/packet/<id>`.
+
+The dashboard menu has **Data packets** (`/packets`): a table with time (IST), ID, latitude, longitude, altitude,
+altitude reference and Δx / Δy / Δz, newest at the top. New packets appear **without refreshing**: the server
+pushes each one the moment it is stored over `GET /api/packet-stream` (Server-Sent Events, built into every
+browser). New rows flash briefly.
+- **Drone** chooses one drone or all drones.
+- **Pause** holds new rows ("N new packets waiting") until **Resume**.
+- The **Live** chip shows the connection. After a network drop the page reconnects by itself and fills in the packets it missed.
+- Clearing all data empties the table on every open page.
+
+Postman: folder **7. Data packets**. Field rules: [DRONE_TEAM_API_GUIDE.md](DRONE_TEAM_API_GUIDE.md) section 6 and `/docs`.
 
 ## How the transmission delay works
 
@@ -129,7 +199,24 @@ scrypt hashes). Set `SESSION_SECRET` so logins survive a restart.
 > prints a NOTE in the Serial Monitor. For the camera board, use **5 s or
 > more**.
 
-## Server API (v1.1.0)
+## Server API (v1.2.0)
+
+**Interactive API docs (Swagger UI): open `/docs` in a browser**, e.g. `http://localhost:4000/docs` or
+`https://drone-tag-hixr.onrender.com/docs`. Every endpoint is listed with its fields, examples and
+replies, and **Try it out** sends real requests to the server you pick at the top. The dashboard
+endpoints (lock icon) use your login: log in at `/login` in the same browser first. The OpenAPI
+description itself is at `/openapi.json` (source: `lib/openapi.js`). `test/openapi.test.js` checks
+that it matches the server, so update `lib/openapi.js` together with any API change.
+
+**Offline copy to share:** `docs/Drone-Tag-API-Docs.html` is ONE file that opens in any browser with no internet and no
+server: Swagger UI, styles, the full API description and the logo are all inside (about 1.9 MB). "Try it out" is
+switched off in it. `docs/openapi.json` is the same description for Postman (Import → that file). After any API
+change, rebuild both with:
+```bash
+node tools/build-offline-docs.js
+```
+The first build downloads Swagger UI once from cdnjs and checks it against the SHA-512 in `tools/swagger-ui-sha512.json`;
+later builds use the cached copy. `npm test` fails if `docs/` is older than `lib/openapi.js`.
 
 | Endpoint | Purpose |
 |---|---|

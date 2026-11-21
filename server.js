@@ -99,6 +99,7 @@ const MAX_HISTORY = 1000;                       // GPS points kept
 const MAX_PHOTOS = 500;                         // image files kept (oldest deleted first)
 const MAX_TELEMETRY = 2000;                     // telemetry records kept
 const MAX_CONFIGS = 200;                        // configuration files kept
+const MAX_PACKETS = 5000;                       // data packets kept (oldest removed first)
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;       // per image
 const MAX_CONFIG_BYTES = 1 * 1024 * 1024;       // per configuration file
 const MAX_JSON_BYTES = 1 * 1024 * 1024;
@@ -107,6 +108,7 @@ let history = [];
 let photos = [];
 let telemetry = [];
 let configs = [];
+let packets = [];   // data packets (POST /api/packet)
 let seq = 0;   // monotonic counter so clients can ask "anything newer than N?"
 
 function loadDb() {
@@ -117,11 +119,12 @@ function loadDb() {
     photos = (Array.isArray(db.photos) ? db.photos : [])
       .filter(p => fs.existsSync(path.join(UPLOAD_DIR, p.file)));
     telemetry = Array.isArray(db.telemetry) ? db.telemetry : [];
+    packets = Array.isArray(db.packets) ? db.packets : [];
     configs = (Array.isArray(db.configs) ? db.configs : [])
       .filter(c => fs.existsSync(path.join(CONFIG_DIR, c.file)));
     seq = Number(db.seq) || 0;
     console.log(
-      `Loaded ${history.length} points, ${photos.length} images, ${telemetry.length} telemetry records ` +
+      `Loaded ${history.length} points, ${photos.length} images, ${telemetry.length} telemetry records, ${packets.length} data packets ` +
       `and ${configs.length} configuration files from ${UPLOAD_DIR}`
     );
   } catch (err) {
@@ -137,7 +140,7 @@ function scheduleSave() {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     try {
-      writeJsonAtomic(DB_PATH, { seq, points: history, photos, telemetry, configs });
+      writeJsonAtomic(DB_PATH, { seq, points: history, photos, telemetry, configs, packets });
     } catch (err) {
       console.error('Could not save uploads/db.json:', err);
     }
@@ -184,6 +187,16 @@ function addTelemetry(record) {
   return record;
 }
 
+// A new data packet: stored, then pushed at once to every open Data packets table.
+function addPacket(record) {
+  record.seq = ++seq;
+  packets.push(record);
+  if (packets.length > MAX_PACKETS) packets.shift();
+  scheduleSave();
+  packetStream.publish(packetOut(record));
+  return record;
+}
+
 function addConfig(config) {
   config.seq = ++seq;
   configs.push(config);
@@ -199,6 +212,8 @@ function clearAll() {
   photos = [];
   telemetry = [];
   configs = [];
+  packets = [];
+  packetStream.reset();
   generation = Date.now();
   scheduleSave();
 }
@@ -302,7 +317,7 @@ function sameTracker(a, b) {
 
 function trackerList() {
   const ids = new Map();
-  [...history, ...photos, ...telemetry, ...configs]
+  [...history, ...photos, ...telemetry, ...configs, ...packets]
     .forEach(x => ids.set(String(x.trackerId).toLowerCase(), x.trackerId));
   return [...ids.values()];
 }
@@ -335,10 +350,14 @@ function offlineAfterMs(trackerId) {
   return Math.max(OFFLINE_AFTER_MS, 3 * intervalFor(trackerId));
 }
 
-function sessionsOf(trackerId, points) {
+// distanceBySeq (optional Map) receives each point's distance from the start of its flight;
+// jumpSeqs (optional Set) the seqs of bad GPS fixes that the distance skipped.
+function sessionsOf(trackerId, points, distanceBySeq = null, jumpSeqs = null) {
   return buildSessions(points, {
     offlineAfterMs: offlineAfterMs(trackerId),
     telemetry: telemetry.filter(r => sameTracker(r.trackerId, trackerId)),
+    distanceBySeq,
+    jumpSeqs,
   });
 }
 
@@ -471,6 +490,7 @@ app.get('/', requirePage, page('overview.html'));
 app.get('/drone', requirePage, page('drone.html'));
 app.get('/images', requirePage, page('images.html'));   // all images of one drone (?tracker=ID)
 app.get('/data', requirePage, page('data.html'));       // all GPS records of one drone (?tracker=ID)
+app.get('/packets', requirePage, page('packets.html')); // data packets, live table (?tracker=ID)
 app.get('/account', requirePage, page('account.html'));
 app.get('/settings', requirePage, page('settings.html'));
 app.get(['/login', '/register'], (req, res, next) => (currentUser(req) ? res.redirect('/') : next()));
@@ -479,6 +499,11 @@ app.get('/register', page('register.html'));
 app.get('/about', page('about.html'));
 app.get('/help', page('help.html'));
 app.get('/support', page('support.html'));
+
+// API documentation: Swagger UI at /docs, the OpenAPI description at /openapi.json (lib/openapi.js).
+// Open to everyone, like the device and read APIs it describes.
+app.get('/docs', page('docs.html'));
+app.get('/openapi.json', (req, res) => res.set('Cache-Control', 'no-store').json(require('./lib/openapi')));
 
 // Static assets (CSS, JS, images) – no directory index.
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
@@ -585,7 +610,10 @@ app.get('/api/export/:trackerId/csv', requireApi, (req, res) => {
   const points = history.filter(p => sameTracker(p.trackerId, trackerId));
   if (points.length === 0) return res.status(404).json({ status: 'error', message: `no data for tracker "${trackerId}"` });
   const base = `${req.protocol}://${req.get('host')}`;
-  const csv = pointsToCsv(points.map(withPhotoUrl), p => base + photoUrl(p.trackerId, p.photoId));
+  const distanceBySeq = new Map();
+  sessionsOf(trackerId, points, distanceBySeq);
+  const rows = points.map(p => ({ ...withPhotoUrl(p), distanceFromStartM: distanceBySeq.get(p.seq) }));
+  const csv = pointsToCsv(rows, p => base + photoUrl(p.trackerId, p.photoId));
   const safe = trackerId.replace(/[^A-Za-z0-9._-]/g, '_');
   res.set({
     'Content-Type': 'text/csv; charset=utf-8',
@@ -766,16 +794,27 @@ app.get('/api/data/:trackerId?', (req, res) => {
   // Tracking sessions: for one tracker all of them; for all trackers the latest one each.
   // For one tracker: its own delay and all its sessions. For all trackers: the default delay
   // and each tracker's own delay and latest session.
+  // Every session carries its distance summary; every point its distance from the
+  // start of its own flight (distanceFromStartM, see lib/distance.js).
   const extra = { offlineAfterMs: offlineAfterMs(trackerId), defaultIntervalMs: config.intervalMs };
+  // A bad GPS fix that the distance skipped is marked gpsJump: true.
+  const distanceBySeq = new Map();
+  const jumpSeqs = new Set();
   if (trackerId !== undefined) {
-    extra.sessions = sessionsOf(trackerId, myPoints);
+    extra.sessions = sessionsOf(trackerId, myPoints, distanceBySeq, jumpSeqs);
     extra.session = extra.sessions[extra.sessions.length - 1] || null;
   } else {
     extra.trackerStatus = trackerList().map(id => {
-      const list = sessionsOf(id, history.filter(p => sameTracker(p.trackerId, id)));
+      const list = sessionsOf(id, history.filter(p => sameTracker(p.trackerId, id)), distanceBySeq, jumpSeqs);
       return { trackerId: id, intervalMs: intervalFor(id), session: list[list.length - 1] || null };
     });
   }
+  const withDistance = p => {
+    const out = withPhotoUrl(p);
+    if (distanceBySeq.has(p.seq)) out.distanceFromStartM = distanceBySeq.get(p.seq);
+    if (jumpSeqs.has(p.seq)) out.gpsJump = true;
+    return out;
+  };
 
   res.set('Cache-Control', 'no-store').json({
     ...extra,
@@ -788,9 +827,9 @@ app.get('/api/data/:trackerId?', (req, res) => {
     seq,
     pointCount: myPoints.length,
     photoCount: myPhotos.length,
-    latest: latest && withPhotoUrl(latest),
+    latest: latest && withDistance(latest),
     latestPhoto: photoMeta(myPhotos[myPhotos.length - 1]),
-    points: points.map(withPhotoUrl),
+    points: points.map(withDistance),
     // Every stored image (oldest first), including those sent without a GPS fix.
     photos: myPhotos.map(photoMeta),
   });
@@ -1113,12 +1152,99 @@ app.get('/api/config/:trackerId', (req, res) => {
   });
 });
 
+// =====================================================================
+// DATA PACKETS:  POST /api/packet,  GET /api/packet[/<TrackerId>],  GET /api/packet-stream
+// =====================================================================
+// Packet: { "id", "lat", "long", "Altitude", "Altitude Reference", "delta_x", "delta_y", "delta_z" }
+// (see lib/packets.js for the accepted spellings). Stored in db.json; every new packet is
+// pushed at once to the open "Data packets" pages through /api/packet-stream.
+const { validatePacket, createPacketStream } = require('./lib/packets');
+const MAX_PACKETS_PER_REQUEST = 100;
+
+// A stored packet as the API returns it (with the time it was recorded, like GPS points).
+function packetOut(p) {
+  return { ...p, ...recordedTime(p.timestamp, p.receivedAt) };
+}
+const packetStream = createPacketStream({ packetsSince: since => packets.filter(p => p.seq > since).map(packetOut) });
+
+// Body: one packet (JSON object) or up to 100 packets (JSON array). Read as text so a
+// modem's missing or wrong Content-Type does not matter.
+app.post('/api/packet', express.text({ type: () => true, limit: MAX_JSON_BYTES }), (req, res) => {
+  let data;
+  try {
+    data = JSON.parse(typeof req.body === 'string' ? req.body : '');
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'send the data packet as JSON, e.g. {"id":"DRONE-01","lat":23.05,"long":72.52,...}' });
+  }
+  const list = Array.isArray(data) ? data : [data];
+  if (list.length === 0 || list.length > MAX_PACKETS_PER_REQUEST) {
+    return res.status(400).json({ status: 'error', message: `send 1 to ${MAX_PACKETS_PER_REQUEST} packets per request` });
+  }
+  const checked = list.map(validatePacket);
+  const bad = checked.map((c, i) => ({ i, errors: c.errors })).filter(b => b.errors.length);
+  if (bad.length) {
+    // Nothing is stored when any packet is invalid, so a device can simply resend the whole batch.
+    return res.status(400).json({
+      status: 'error',
+      message: 'invalid data packet',
+      errors: Array.isArray(data) ? bad.map(b => `packet ${b.i + 1}: ${b.errors.join('; ')}`) : bad[0].errors,
+    });
+  }
+  const receivedAt = new Date().toISOString();
+  const saved = checked.map(c => addPacket({ id: `${Date.now()}-${seq + 1}`, ...c.record, receivedAt }));
+  const ignored = [...new Set(checked.flatMap(c => c.ignored))].slice(0, 20);
+  const first = saved[0];
+  console.log(`[${receivedAt}] ${first.trackerId} data packet${saved.length > 1 ? ` x${saved.length}` : ''} -> ${first.lat}, ${first.long}`);
+  const reply = Array.isArray(data)
+    ? { status: 'ok', intervalMs: intervalFor(first.trackerId), count: saved.length, packetIds: saved.map(p => p.id), seq: saved[saved.length - 1].seq }
+    : { status: 'ok', intervalMs: intervalFor(first.trackerId), packetId: first.id, seq: first.seq };
+  if (ignored.length) reply.ignoredFields = ignored;
+  res.status(201).json(reply);
+});
+
+//   GET /api/packet                    newest packets of every drone
+//   GET /api/packet/<TrackerId>        newest packets of one drone (404 if it has none)
+//   ...?since=<seq>                    only packets newer than seq
+//   ...&limit=N                        at most N packets (default 200, max 5000); oldest first
+function packetList(req, res, mine, trackerId) {
+  const since = Number(req.query.since);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), MAX_PACKETS);
+  const list = (Number.isFinite(since) ? mine.filter(p => p.seq > since) : mine).slice(-limit);
+  const ids = new Map();
+  packets.forEach(p => ids.set(String(p.trackerId).toLowerCase(), p.trackerId));
+  res.set('Cache-Control', 'no-store').json({
+    status: 'ok',
+    trackerId: trackerId === undefined ? null : mine[mine.length - 1].trackerId,
+    serverTime: new Date().toISOString(),
+    seq,
+    count: mine.length,
+    trackers: [...ids.values()],
+    packets: list.map(packetOut),
+  });
+}
+
+app.get('/api/packet', (req, res) => packetList(req, res, packets));
+
+app.get('/api/packet/:trackerId', (req, res) => {
+  const mine = packets.filter(p => sameTracker(p.trackerId, req.params.trackerId));
+  if (mine.length === 0) {
+    const ids = [...new Set(packets.map(p => p.trackerId))];
+    return res.status(404).json({ status: 'error', message: `no data packets for tracker "${req.params.trackerId}"`, trackers: ids });
+  }
+  packetList(req, res, mine, req.params.trackerId);
+});
+
+// Live feed for the dashboard (Server-Sent Events): GET /api/packet-stream[?trackerId=ID][&since=seq]
+app.get('/api/packet-stream', packetStream.handler);
+
 // Any other /api/... path: list the real endpoints.
 app.use('/api', (req, res) => {
   res.status(404).json({
     status: 'error',
     message: 'Unknown endpoint. Endpoints: POST /api/data, GET /api/data/<TrackerId>, POST /api/telemetry, ' +
-      'GET /api/telemetry/<TrackerId>, POST /api/config, GET /api/config/<TrackerId>, GET /health',
+      'GET /api/telemetry/<TrackerId>, POST /api/config, GET /api/config/<TrackerId>, POST /api/packet, ' +
+      'GET /api/packet/<TrackerId>, GET /health. ' +
+      'Full documentation: /docs',
   });
 });
 

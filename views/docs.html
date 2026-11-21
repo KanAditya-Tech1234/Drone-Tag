@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API docs · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css">
+<style>
+  /* Drone Tag header above Swagger UI (same green + saffron as the dashboard). */
+  body { margin: 0; background: #fff; }
+  .dt-top {
+    background: linear-gradient(90deg, #0b3d2e, #14532d); color: #fff; border-bottom: 4px solid #f59e0b;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  }
+  .dt-top .inner { max-width: 1460px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .dt-top img { width: 34px; height: 34px; border-radius: 50%; background: #fff; }
+  .dt-top b { font-size: 17px; }
+  .dt-top span { opacity: 0.8; font-size: 14px; }
+  .dt-top nav { margin-left: auto; display: flex; gap: 14px; font-size: 14px; }
+  .dt-top a { color: #fde68a; text-decoration: none; font-weight: 600; }
+  .dt-top a:hover { text-decoration: underline; }
+  .swagger-ui .topbar { display: none; }
+  .swagger-ui .info { margin: 24px 0; }
+</style>
+</head>
+<body>
+<header class="dt-top">
+  <div class="inner">
+    <img src="/images/logo.png" alt="">
+    <b>Drone Tag API</b><span>Interactive documentation</span>
+    <nav><a href="/">Dashboard</a><a href="/openapi.json" target="_blank" rel="noopener">openapi.json</a><a href="/help">Help</a></nav>
+  </div>
+</header>
+<div id="swagger"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"></script>
+<script>
+  window.ui = SwaggerUIBundle({
+    url: '/openapi.json',
+    dom_id: '#swagger',
+    deepLinking: true,
+    docExpansion: 'list',            // show the endpoints, not every schema
+    defaultModelsExpandDepth: 0,     // schemas collapsed at the bottom
+    tryItOutEnabled: false,
+    displayRequestDuration: true,
+    filter: true,                    // search box for endpoints
+    persistAuthorization: true,
+    withCredentials: true,           // "Try it out" sends the dashboard login cookie of this site
+    validatorUrl: null,              // never send the description to the online validator
+  });
+</script>
+</body>
+</html>

@@ -507,6 +507,415 @@
           }
         }
       ]
+    },
+    {
+      "name": "6. Distance flown",
+      "description": "Sends a small zig-zag test flight and checks the distance / area numbers. Run the three requests in order (or right-click this folder → Run folder). Needs the server version with the distance feature (v1.2+).",
+      "item": [
+        {
+          "name": "Send a test flight (8 positions)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sends a small zig-zag test flight before this request runs.",
+                  "// Every run uses a NEW Tracker ID, so the result is never mixed with older data.",
+                  "const ROUTE = [[0, 0], [100, 0], [100, 30], [0, 30], [0, 60], [100, 60], [100, 90], [0, 90]];   // metres east, north",
+                  "const STEP_S = 20;                                    // 20 s between positions (about 5 m/s, a realistic speed)",
+                  "const LAT0 = 23.03, LON0 = 72.58;",
+                  "const M_LAT = 111195, M_LON = M_LAT * Math.cos(LAT0 * Math.PI / 180);",
+                  "const id = 'DIST-TEST-' + Date.now().toString().slice(-6);",
+                  "pm.collectionVariables.set('distTrackerId', id);",
+                  "",
+                  "// Device time in IST \"YYYY-MM-DD HH:MM:SS\", as the drone tags send it. The flight ends now.",
+                  "const t0 = Date.now() - (ROUTE.length - 1) * STEP_S * 1000;",
+                  "const ist = ms => new Date(ms + 330 * 60000).toISOString().replace('T', ' ').slice(0, 19);",
+                  "const body = i => JSON.stringify({",
+                  "  TrackerId: id,",
+                  "  Latitude: (LAT0 + ROUTE[i][1] / M_LAT).toFixed(7),",
+                  "  Longitude: (LON0 + ROUTE[i][0] / M_LON).toFixed(7),",
+                  "  Altitude: '12',",
+                  "  Timestamp: ist(t0 + i * STEP_S * 1000),",
+                  "});",
+                  "",
+                  "// Positions 1-7 are sent here one after another; this request itself sends position 8.",
+                  "function send(i) {",
+                  "  if (i >= ROUTE.length - 1) return;",
+                  "  pm.sendRequest({",
+                  "    url: pm.variables.get('baseUrl') + '/api/data',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: body(i) },",
+                  "  }, (err, res) => {",
+                  "    if (err || res.code !== 200) console.error('position ' + (i + 1) + ' failed', err || res.code);",
+                  "    send(i + 1);",
+                  "  });",
+                  "}",
+                  "send(0);",
+                  "pm.variables.set('lastPositionBody', body(ROUTE.length - 1));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "console.log('Test flight sent as ' + pm.collectionVariables.get('distTrackerId'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{{lastPositionBody}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data"
+              ]
+            },
+            "description": "The pre-request script sends positions 1-7 (20 s apart in device time, a new Tracker ID each run); this request sends position 8."
+          }
+        },
+        {
+          "name": "Read the distance of the test flight",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Checks the distance numbers of the test flight (see \"Send a test flight\").",
+                  "const j = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('The server has the distance feature (v1.2+)', () => {",
+                  "  pm.expect(j.session && j.session.distance, 'No session.distance: this server runs an older version. Deploy the new code first.').to.be.an('object');",
+                  "});",
+                  "const d = j.session && j.session.distance;",
+                  "if (d) {",
+                  "  console.log('Distance flown: ' + d.flownM + ' m | straight line: ' + d.straightLineM + ' m | area box: ' +",
+                  "    d.areaBox.widthM + ' m x ' + d.areaBox.heightM + ' m = ' + d.areaBox.areaM2 + ' m2');",
+                  "  pm.test('Distance flown is the whole zig-zag path: 490 m', () => pm.expect(d.flownM).to.be.within(487, 493));",
+                  "  pm.test('Straight line start -> end is 90 m', () => pm.expect(d.straightLineM).to.be.within(89, 91));",
+                  "  pm.test('Area box is 100 m x 90 m = 9,000 m2', () => pm.expect(d.areaBox.areaM2).to.be.within(8900, 9100));",
+                  "  pm.test('Every position has its distance from the start', () =>",
+                  "    pm.expect(j.points.map(p => Math.round(p.distanceFromStartM))).to.eql([0, 100, 130, 230, 260, 360, 390, 490]));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/data/{{distTrackerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data",
+                "{{distTrackerId}}"
+              ]
+            },
+            "description": "session.distance: flownM, straightLineM, startEndBox, areaBox (width, height, areaM2), durationSec, avgSpeedKmh. points[].distanceFromStartM for every position."
+          }
+        },
+        {
+          "name": "Custom range A → B (positions 3 → 6)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A custom range A -> B, worked out from the API data the same way the dashboard does:",
+                  "//   distance in range = distanceFromStartM(B) - distanceFromStartM(A)",
+                  "//   area of range     = box around the positions from A to B (bad GPS fixes left out)",
+                  "// Here A = position 3 and B = position 6 of the test flight.",
+                  "const j = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const A = 3, B = 6;                                   // 1-based positions in the flight",
+                  "const pts = (j.points || []).filter(p => !p.gpsJump);",
+                  "pm.test('The flight has at least ' + B + ' positions with distances', () => {",
+                  "  pm.expect(pts.length).to.be.at.least(B);",
+                  "  pm.expect(pts[0].distanceFromStartM, 'No distanceFromStartM: deploy the new code first.').to.be.a('number');",
+                  "});",
+                  "if (pts.length >= B && typeof pts[0].distanceFromStartM === 'number') {",
+                  "  const R = 6371008.8, rad = x => x * Math.PI / 180;",
+                  "  const hav = (a, b) => 2 * R * Math.asin(Math.sqrt(Math.sin(rad(b.lat - a.lat) / 2) ** 2 +",
+                  "    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lon - a.lon) / 2) ** 2));",
+                  "  const range = pts.slice(A - 1, B);",
+                  "  const flown = range[range.length - 1].distanceFromStartM - range[0].distanceFromStartM;",
+                  "  const lats = range.map(p => p.lat), lons = range.map(p => p.lon);",
+                  "  const s = Math.min(...lats), n = Math.max(...lats), w = Math.min(...lons), e = Math.max(...lons);",
+                  "  const width = hav({ lat: (s + n) / 2, lon: w }, { lat: (s + n) / 2, lon: e });",
+                  "  const height = hav({ lat: s, lon: w }, { lat: n, lon: w });",
+                  "  console.log('Range position ' + A + ' -> ' + B + ': flown ' + flown.toFixed(1) + ' m, area box ' +",
+                  "    width.toFixed(1) + ' m x ' + height.toFixed(1) + ' m = ' + Math.round(width * height) + ' m2');",
+                  "  pm.test('Distance in range 3 -> 6 is 230 m (100 + 30 + 100)', () => pm.expect(flown).to.be.within(228, 232));",
+                  "  pm.test('Area of range 3 -> 6 is 100 m x 30 m = 3,000 m2', () => pm.expect(width * height).to.be.within(2950, 3050));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/data/{{distTrackerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "data",
+                "{{distTrackerId}}"
+              ]
+            },
+            "description": "Works out a range from the API data exactly like the dashboard does (distance = difference of distanceFromStartM; area = box around the positions in the range)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Data packets",
+      "description": "Data packet API: { id, lat, lon, Alt, Alt_R, d_x, d_y, d_z }. Open the dashboard page \"Data packets\" (/packets) while sending: new packets appear in the table without refreshing.",
+      "item": [
+        {
+          "name": "Send a data packet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const j = pm.response.json();",
+                  "pm.test('Has a packetId', () => pm.expect(j.packetId).to.be.a('string'));",
+                  "pm.test('No unknown fields', () => pm.expect(j.ignoredFields).to.equal(undefined));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/packet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "packet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"1005\",\n  \"lat\": 23.078143,\n  \"lon\": 72.531243,\n  \"Alt\": 16.5,\n  \"Alt_R\": \"AGL\",\n  \"d_x\": 0.32,\n  \"d_y\": -0.18,\n  \"d_z\": 0.19\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "One packet. Only id, lat and lon are required. Change the values and send again to see new rows appear on /packets."
+          }
+        },
+        {
+          "name": "Send a batch of data packets",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('All 3 stored', () => pm.expect(pm.response.json().count).to.equal(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/packet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "packet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"id\": \"1005\",\n    \"lat\": 23.07816,\n    \"lon\": 72.53126,\n    \"Alt\": 16.8,\n    \"Alt_R\": \"AGL\",\n    \"d_x\": 0.35,\n    \"d_y\": -0.16,\n    \"d_z\": 0.21\n  },\n  {\n    \"id\": \"1005\",\n    \"lat\": 23.078178,\n    \"lon\": 72.531277,\n    \"Alt\": 17.1,\n    \"Alt_R\": \"AGL\",\n    \"d_x\": 0.38,\n    \"d_y\": -0.15,\n    \"d_z\": 0.22\n  },\n  {\n    \"id\": \"1005\",\n    \"lat\": 23.078195,\n    \"lon\": 72.531294,\n    \"Alt\": 17.4,\n    \"Alt_R\": \"MSL\",\n    \"d_x\": 0.41,\n    \"d_y\": -0.13,\n    \"d_z\": 0.24\n  }\n]",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Up to 100 packets in one request (a JSON array). All are stored, or none if any is invalid."
+          }
+        },
+        {
+          "name": "Read data packets of drone 1005",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test('Packets have all fields', () => {",
+                  "  const p = j.packets[j.packets.length - 1];",
+                  "  ['trackerId', 'lat', 'long', 'altitude', 'altitudeReference', 'deltaX', 'deltaY', 'deltaZ'].forEach(k => pm.expect(p).to.have.property(k));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/packet/1005",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "packet",
+                "1005"
+              ]
+            },
+            "description": "Oldest first. Optional: ?since=<seq> (only newer ones), ?limit=N (default 200)."
+          }
+        },
+        {
+          "name": "Read newest data packets of all drones",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/packet?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "packet"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid packet → 400 (every problem listed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Problems are listed', () => pm.expect(pm.response.json().errors.length).to.be.above(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/packet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "packet"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"1005\",\n  \"lat\": 123.4,\n  \"d_x\": \"abc\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "lat out of range, lon missing, d_x not a number."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "distTrackerId",
+      "value": ""
     }
   ]
 }

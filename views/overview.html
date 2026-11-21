@@ -154,7 +154,7 @@
       return `<div class="tracker-card">
         <h3><span>${DT.esc(t.trackerId)}</span>${d ? `<span class="chip">${DT.esc(d.application)}</span>` : '<span class="chip alt">Not registered</span>'}</h3>
         <div class="muted" style="font-size:13px">Last seen: ${t.lastSeen ? DT.ist(t.lastSeen) : '–'}</div>
-        <div class="chips">${t.session ? (t.session.status === 'live' ? '<span class="chip live">Live</span>' : '<span class="chip ended">Ended</span>') : ''}<span class="chip">${t.points} points</span><span class="chip alt">${t.photos} images</span></div>
+        <div class="chips">${t.session ? (t.session.status === 'live' ? '<span class="chip live">Live</span>' : '<span class="chip ended">Ended</span>') : ''}<span class="chip">${t.points} points</span><span class="chip alt">${t.photos} images</span>${t.session && t.session.distance ? `<span class="chip" title="Distance flown in the latest flight">Flown ${DT.formatDistance(t.session.distance.flownM)}</span>` : ''}</div>
         <a class="btn btn-outline" href="/drone?tracker=${encodeURIComponent(t.trackerId)}">Open dashboard</a>
       </div>`;
     }).join('') : '<div class="empty">No drone matches. Change the filters, or wait for a drone to send data.</div>';

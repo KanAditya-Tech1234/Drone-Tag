@@ -46,6 +46,41 @@
         </button>
       </div>
     </div>
+    <!-- Distance covered in the flight shown on the map (see lib/distance.js).
+         Clicking a point on the path switches the tiles to "start → that point". -->
+    <div class="sel-bar hidden" id="sel-bar" role="status">
+      <span id="sel-text"></span>
+      <button class="btn btn-outline" type="button" id="sel-clear">Show whole flight</button>
+    </div>
+    <div class="dist-panel hidden" id="dist-panel">
+      <div class="dist-tile main">
+        <div class="label" id="l-flown">Distance flown</div>
+        <div class="value" id="d-flown">–</div>
+        <div class="sub" id="d-flown-sub"></div>
+      </div>
+      <div class="dist-tile">
+        <div class="label" id="l-straight">Straight line start → end</div>
+        <div class="value" id="d-straight">–</div>
+        <div class="sub">Shortest possible distance</div>
+      </div>
+      <div class="dist-tile">
+        <div class="label"><span id="se-swatch"></span><span id="l-sebox">Start–end box</span></div>
+        <div class="value" id="d-sebox">–</div>
+        <div class="sub" id="d-sebox-sub"></div>
+      </div>
+      <div class="dist-tile">
+        <div class="label"><span id="area-swatch"></span><span id="l-area">Flight area box</span></div>
+        <div class="value" id="d-area">–</div>
+        <div class="sub" id="d-area-sub"></div>
+      </div>
+    </div>
+    <div class="page-head hidden" id="dist-foot" style="align-items:center">
+      <p class="dist-note" id="dist-note" style="margin:0"></p>
+      <div class="box-toggles">
+        <label><input type="checkbox" id="show-area"> Show flight area box</label>
+        <label><input type="checkbox" id="show-sebox"> Show start–end box</label>
+      </div>
+    </div>
     <div class="map-wrap" id="map-wrap">
       <div id="map" class="map"></div>
       <aside class="img-side" id="img-side" aria-label="Images of this drone" hidden>
@@ -74,6 +109,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="/js/common.js"></script>
+<script src="/js/geo.js"></script>
 <script>
 (async () => {
   const me = await DT.header('drone');
@@ -85,19 +121,85 @@
   // ---- map: one path line and at most one start pin, one arrow and one end pin ----
   const map = L.map('map').setView([22.6, 72.5], 7);
   DT.baseLayers(map);
-  DT.legend(map, ['start', 'live', 'end']);
+  const legend = DT.legend(map, ['start', 'live', 'end', 'area', 'startEnd']);
   const pathLine = L.polyline([], { color: '#b45309', weight: 4, opacity: 0.9 }).addTo(map);
+  // Optional boxes around the flight, switched on with the checkboxes above the map.
+  const boxes = {
+    area: { rect: null, toggle: $('show-area'), style: DT.BOX_STYLES.area },
+    startEnd: { rect: null, toggle: $('show-sebox'), style: DT.BOX_STYLES.startEnd },
+  };
+  const swatch = s => `<span style="display:inline-block;width:14px;height:10px;border:2px ${s.dashArray.startsWith('3') ? 'dotted' : 'dashed'} ${s.color};border-radius:2px"></span>`;
+  $('area-swatch').innerHTML = swatch(DT.BOX_STYLES.area);
+  $('se-swatch').innerHTML = swatch(DT.BOX_STYLES.startEnd);
   const dots = L.layerGroup().addTo(map);
   const marks = { start: null, arrow: null, end: null };
   let arrowDeg = null;
   let dotsKey = '';
   let fittedFor = '';
 
+  // ---- range selection: measure the flight between any two of its points ----
+  // rangeFrom / rangeTo: seq of the chosen start / end point; null = the flight's own start / end.
+  // Clicking a point makes it the end of the range (start → here); its popup has
+  // "Set as start" and "Set as end" to choose both ends freely.
+  let rangeFrom = null;
+  let rangeTo = null;
+  let lastClick = null;       // { seq, prevTo }: the last point clicked and the end it replaced
+  let shownPts = [];          // the points of the flight on the map
+  const SEL_COLOR = '#2563eb';
+  const FROM_COLOR = '#16a34a';
+  const selLine = L.polyline([], { color: SEL_COLOR, weight: 7, opacity: 0.45, interactive: false }).addTo(map);
+  const ringFrom = L.circleMarker([0, 0], { radius: 10, color: FROM_COLOR, weight: 3, fill: false, interactive: false });
+  const ringTo = L.circleMarker([0, 0], { radius: 10, color: SEL_COLOR, weight: 3, fill: false, interactive: false });
+  const rangeActive = () => rangeFrom !== null || rangeTo !== null;
+  const redraw = () => { if (shownSession) renderDistance(shownSession); };
+
+  function setRangeEnd(seq) { rangeTo = seq; redraw(); }
+  function setRangeStart(seq) {
+    // The click that opened this popup also made the point the end: undo that.
+    if (lastClick && lastClick.seq === seq) rangeTo = lastClick.prevTo;
+    rangeFrom = seq;
+    lastClick = null;
+    redraw();
+  }
+  function clearSelection() {
+    rangeFrom = null;
+    rangeTo = null;
+    lastClick = null;
+    redraw();
+  }
+  $('sel-clear').addEventListener('click', clearSelection);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && rangeActive()) clearSelection(); });
+
+  // While a popup is open or a range is chosen the map does not follow the live drone,
+  // so it does not jump away from the points being looked at.
+  let popupOpen = false;
+  map.on('popupclose', () => { popupOpen = false; });
+  const inspecting = () => popupOpen || rangeActive();
+
+  // "Set as start" / "Set as end" buttons inside the point popups.
+  map.on('popupopen', e => {
+    popupOpen = true;
+    e.popup.getElement().querySelectorAll('[data-range]').forEach(btn => btn.addEventListener('click', () => {
+      const seq = Number(btn.dataset.seq);
+      if (btn.dataset.range === 'start') setRangeStart(seq);
+      else { lastClick = null; setRangeEnd(seq); }
+      map.closePopup();
+    }));
+  });
+
   // Creates the marker the first time, afterwards only moves it (no duplicates).
+  // Clicking the green start pin starts the range at the flight's start; the red
+  // end pin / live arrow ends it at the flight's end.
   function place(kind, pos, icon, html) {
     const ll = [pos.lat, pos.lon];
-    if (!marks[kind]) marks[kind] = L.marker(ll, { icon, zIndexOffset: kind === 'arrow' ? 1000 : 0 }).addTo(map).bindPopup(html);
-    else { marks[kind].setLatLng(ll); marks[kind].setPopupContent(html); }
+    if (!marks[kind]) {
+      marks[kind] = L.marker(ll, { icon, zIndexOffset: kind === 'arrow' ? 1000 : 0 }).addTo(map).bindPopup(html);
+      marks[kind].on('click', () => {
+        lastClick = null;
+        if (kind === 'start') rangeFrom = null; else rangeTo = null;
+        redraw();
+      });
+    } else { marks[kind].setLatLng(ll); marks[kind].setPopupContent(html); }
     return marks[kind];
   }
   function drop(kind) {
@@ -109,6 +211,151 @@
     pathLine.setLatLngs([]);
     dots.clearLayers();
     dotsKey = '';
+    drawBox('area', null);
+    drawBox('startEnd', null);
+    rangeFrom = null;
+    rangeTo = null;
+    lastClick = null;
+    shownPts = [];
+    selLine.setLatLngs([]);
+    ringFrom.remove();
+    ringTo.remove();
+    $('sel-bar').classList.add('hidden');
+    $('dist-panel').classList.add('hidden');
+    $('dist-foot').classList.add('hidden');
+  }
+
+  // Draws (or removes) one of the flight boxes. bounds: [[south, west], [north, east]] or null.
+  // force: draw even if its checkbox is off (the area box of a selected point).
+  function drawBox(kind, bounds, tooltip = '', force = false) {
+    const b = boxes[kind];
+    const show = Boolean(bounds) && (force || b.toggle.checked);
+    legend.show(kind, show);
+    if (!show) {
+      if (b.rect) { map.removeLayer(b.rect); b.rect = null; }
+      return;
+    }
+    if (!b.rect) b.rect = L.rectangle(bounds, { ...b.style, interactive: true }).addTo(map).bindTooltip('', { sticky: true });
+    else b.rect.setBounds(bounds);
+    b.rect.setTooltipContent(tooltip);
+    b.rect.bringToBack();
+  }
+
+  // Popup line with the distance flown from the start of the flight up to a point.
+  const distLine = m => Number.isFinite(m) ? `<br><b>Distance from start:</b> ${DT.formatDistance(m)}` : '';
+
+  // Popup of a path point: distance and area from the start up to it (worked out
+  // when opened), plus buttons to make it the start or the end of the range.
+  function pointPopup(id, p) {
+    const d = DTGeo.summaryUpTo(shownPts, p.seq);
+    const area = d ? `<br><b>Area start → here:</b> ${DT.formatArea(d.areaBox.areaM2)}` +
+      `<br><span class="when">${DT.formatDistance(d.areaBox.widthM)} × ${DT.formatDistance(d.areaBox.heightM)} · ` +
+      `point ${d.pointCount} of ${shownPts.length}</span>` : '';
+    const buttons = `<div class="pop-actions">
+      <button type="button" class="btn btn-outline pop-from" data-range="start" data-seq="${p.seq}">Set as start</button>
+      <button type="button" class="btn btn-outline pop-to" data-range="end" data-seq="${p.seq}">Set as end</button></div>`;
+    return DT.mapPopup(id, DT.recTime(p), distLine(p.distanceFromStartM) + area + buttons);
+  }
+
+  // The checkboxes are remembered in this browser; ticking one redraws at once.
+  let shownSession = null;
+  for (const [kind, b] of Object.entries(boxes)) {
+    try { b.toggle.checked = localStorage.getItem('dt-box-' + kind) === '1'; } catch (e) { /* storage blocked */ }
+    b.toggle.addEventListener('change', () => {
+      try { localStorage.setItem('dt-box-' + kind, b.toggle.checked ? '1' : '0'); } catch (e) { /* storage blocked */ }
+      if (shownSession) renderDistance(shownSession);
+    });
+  }
+
+  // Points that can start / end a range (not bad GPS fixes) and how they are named.
+  const usable = seq => shownPts.some(p => p.seq === seq && !p.gpsJump);
+  const pointName = seq => {
+    const i = shownPts.findIndex(p => p.seq === seq);
+    return `point ${i + 1} (${DT.ist(DT.recTime(shownPts[i])).slice(11, 19)})`;
+  };
+
+  // The distance panel above the map, for flight s: the whole flight, or the
+  // range chosen on the map (start → clicked point, or any start → any end).
+  function renderDistance(s) {
+    shownSession = s;
+    if (!s.distance) { $('dist-panel').classList.add('hidden'); $('dist-foot').classList.add('hidden'); return; }
+
+    // A chosen point that is no longer shown (or a bad fix) falls back to the flight's own start / end.
+    if (rangeFrom !== null && !usable(rangeFrom)) rangeFrom = null;
+    if (rangeTo !== null && !usable(rangeTo)) rangeTo = null;
+    const firstSeq = shownPts.length ? shownPts[0].seq : null;
+    const lastSeq = shownPts.length ? shownPts[shownPts.length - 1].seq : null;
+    let fromSeq = rangeFrom === null ? firstSeq : rangeFrom;
+    let toSeq = rangeTo === null ? lastSeq : rangeTo;
+    if (fromSeq > toSeq) [fromSeq, toSeq] = [toSeq, fromSeq];          // chosen the other way round
+    // Same calculation as the server, on just that part of the flight (public/js/geo.js).
+    const part = rangeActive() && shownPts.length ? DTGeo.summaryBetween(shownPts, fromSeq, toSeq) : null;
+    const sel = Boolean(part);
+    const d = part ? { ...s.distance, ...part } : s.distance;
+    const fromText = fromSeq === firstSeq ? 'flight start' : pointName(fromSeq);
+    const toText = toSeq === lastSeq ? (s.status === 'live' ? 'latest position' : 'flight end') : pointName(toSeq);
+
+    const km = DT.formatDistance;
+    const mins = d.durationSec >= 60 ? `${Math.round(d.durationSec / 60)} min` : `${d.durationSec} s`;
+    $('l-flown').textContent = sel ? 'Distance flown in range' : 'Distance flown';
+    $('l-straight').textContent = sel ? 'Straight line, range start → end' : 'Straight line start → end';
+    $('l-sebox').textContent = sel ? 'Range start–end box' : 'Start–end box';
+    $('l-area').textContent = sel ? 'Area of range' : 'Flight area box';
+    $('d-flown').textContent = km(d.flownM);
+    $('d-flown-sub').textContent = d.avgSpeedKmh == null
+      ? (sel ? 'Sum of every GPS hop in the range' : 'Sum of every GPS hop along the path')
+      : `In ${mins} · average ${d.avgSpeedKmh} km/h`;
+    $('d-straight').textContent = km(d.straightLineM);
+    $('d-sebox').textContent = km(d.startEndBox.alongSidesM);
+    $('d-sebox-sub').textContent = `${km(d.startEndBox.eastWestM)} east–west + ${km(d.startEndBox.northSouthM)} north–south`;
+    $('d-area').textContent = DT.formatArea(d.areaBox.areaM2);
+    $('d-area-sub').textContent = `${km(d.areaBox.widthM)} wide × ${km(d.areaBox.heightM)} tall`;
+    $('dist-panel').classList.toggle('selected', Boolean(sel));
+
+    if (sel) {
+      $('dist-note').textContent = `Showing only the selected range: ${d.pointCount} of ${s.pointCount} positions` +
+        (d.ignoredJumps ? `, without ${d.ignoredJumps} bad GPS fix${d.ignoredJumps === 1 ? '' : 'es'}` : '') +
+        '. Click a point to move the end of the range; use "Set as start" in its popup to move the start. ' +
+        'The green start pin / red end pin put that end back to the flight\'s own start / end.';
+    } else {
+      const skipped = [
+        d.ignoredSmallMoves ? `${d.ignoredSmallMoves} tiny GPS wobble${d.ignoredSmallMoves === 1 ? '' : 's'} (under ${d.minStepM} m)` : '',
+        d.ignoredJumps ? `${d.ignoredJumps} bad GPS fix${d.ignoredJumps === 1 ? '' : 'es'} (grey dots: jumped away faster than ` +
+          `${Math.round(d.maxSpeedMps * 3.6)} km/h and came straight back; if these were real moves, the positions were sent ` +
+          `faster than a drone can fly)` : '',
+      ].filter(Boolean).join(' and ');
+      $('dist-note').textContent = `Distance flown adds up the path between all ${s.pointCount} positions of this flight` +
+        (s.status === 'live' ? ' and grows while it is live.' : '.') +
+        (skipped ? ` Ignored ${skipped}.` : '') +
+        ' The boxes only show the area; they do not follow the turns. Click any point on the path to measure part of the flight.';
+    }
+    $('dist-panel').classList.remove('hidden');
+    $('dist-foot').classList.remove('hidden');
+
+    // Range bar, highlighted path of the range, a green ring at its start and a blue ring at its end.
+    const ptA = sel ? shownPts.find(p => p.seq === fromSeq) : null;
+    const ptB = sel ? shownPts.find(p => p.seq === toSeq) : null;
+    $('sel-bar').classList.toggle('hidden', !sel);
+    if (sel) {
+      $('sel-text').textContent = `Range: ${fromText} → ${toText} · ${d.pointCount} of ${s.pointCount} positions`;
+      selLine.setLatLngs(shownPts.filter(p => p.seq >= fromSeq && p.seq <= toSeq && !p.gpsJump).map(p => [p.lat, p.lon]));
+      if (fromSeq !== firstSeq) ringFrom.setLatLng([ptA.lat, ptA.lon]).addTo(map); else ringFrom.remove();
+      if (toSeq !== lastSeq) ringTo.setLatLng([ptB.lat, ptB.lon]).addTo(map); else ringTo.remove();
+    } else {
+      selLine.setLatLngs([]);
+      ringFrom.remove();
+      ringTo.remove();
+    }
+
+    // Boxes: the area box of a selected range is always drawn (that is what was asked for).
+    const a = d.areaBox;
+    drawBox('area', [[a.south, a.west], [a.north, a.east]],
+      `${sel ? 'Area of the selected range' : 'Flight area box'}: ${km(a.widthM)} × ${km(a.heightM)} = ${DT.formatArea(a.areaM2)}`,
+      sel);
+    const p1 = ptA || s.start;
+    const p2 = ptB || (s.status === 'live' ? s.current : s.end);
+    drawBox('startEnd', [[Math.min(p1.lat, p2.lat), Math.min(p1.lon, p2.lon)], [Math.max(p1.lat, p2.lat), Math.max(p1.lon, p2.lon)]],
+      `${sel ? 'Range start–end box' : 'Start–end box'}: ${km(d.startEndBox.eastWestM)} + ${km(d.startEndBox.northSouthM)} = ${km(d.startEndBox.alongSidesM)} along the sides`);
   }
 
   const validFix = p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
@@ -155,27 +402,38 @@
 
     // This flight's points only, so an older flight never mixes into the current one.
     const pts = (body.points || []).filter(p => p.seq >= s.firstSeq && p.seq <= s.lastSeq && validFix(p));
-    pathLine.setLatLngs(pts.map(p => [p.lat, p.lon]));
-    const key = `${s.id}|${pts.length}`;
+    shownPts = pts;
+    // Bad GPS fixes (gpsJump) are left out of the line and shown as grey dots.
+    pathLine.setLatLngs(pts.filter(p => !p.gpsJump).map(p => [p.lat, p.lon]));
+    const key = `${s.id}|${pts.length}|${s.distance ? s.distance.flownM : ''}`;
     if (key !== dotsKey) {
       dots.clearLayers();
       pts.slice(1, -1).forEach(p => {
-        L.circleMarker([p.lat, p.lon], { radius: 3.5, color: '#b45309', weight: 1.5, fillColor: '#fff', fillOpacity: 1 })
-          .addTo(dots).bindPopup(DT.mapPopup(id, DT.recTime(p)));
+        if (p.gpsJump) {
+          L.circleMarker([p.lat, p.lon], { radius: 4, color: '#6b7280', weight: 1.5, dashArray: '2 2', fillColor: '#d1d5db', fillOpacity: 0.9 })
+            .addTo(dots).bindPopup(DT.mapPopup(id, DT.recTime(p),
+              '<br><b>Ignored:</b> bad GPS fix (jumped away and straight back), not counted in the distance'));
+          return;
+        }
+        // Clicking a point selects it: the tiles and boxes then cover start → this point.
+        L.circleMarker([p.lat, p.lon], { radius: 4.5, color: '#b45309', weight: 1.5, fillColor: '#fff', fillOpacity: 1 })
+          .addTo(dots).bindPopup(() => pointPopup(id, p))
+          .on('click', () => { lastClick = { seq: p.seq, prevTo: rangeTo }; setRangeEnd(p.seq); });
       });
       dotsKey = key;
     }
+    const flown = s.distance ? s.distance.flownM : NaN;
 
     // Green start pin: the first position of the flight, never moves.
-    place('start', s.start, DT.markers.start(), DT.mapPopup(id, s.start.receivedAt));
+    place('start', s.start, DT.markers.start(), DT.mapPopup(id, s.start.receivedAt, distLine(0)));
 
     if (s.status === 'live') {
       // Live: arrow at the latest position; no red end pin yet.
       drop('end');
       const deg = s.headingDeg == null ? 0 : s.headingDeg;
-      const arrow = place('arrow', s.current, DT.markers.arrow(deg), DT.mapPopup(id, s.current.receivedAt));
+      const arrow = place('arrow', s.current, DT.markers.arrow(deg), DT.mapPopup(id, s.current.receivedAt, distLine(flown)));
       if (deg !== arrowDeg) { arrow.setIcon(DT.markers.arrow(deg)); arrowDeg = deg; }
-      if (fittedFor === s.id && !map.getBounds().contains(arrow.getLatLng())) map.panTo(arrow.getLatLng(), { animate: false });
+      if (fittedFor === s.id && !inspecting() && !map.getBounds().contains(arrow.getLatLng())) map.panTo(arrow.getLatLng(), { animate: false });
       chip.className = 'chip live';
       chip.textContent = 'Live · tracking';
       $('track-note').textContent = `Flight ${s.number} is live. Last position ${DT.ist(s.lastSeenAt)}. ` +
@@ -183,12 +441,14 @@
     } else {
       // Ended: red pin fixed at the last position received.
       drop('arrow');
-      place('end', s.end, DT.markers.end(), DT.mapPopup(id, s.end.receivedAt));
+      place('end', s.end, DT.markers.end(), DT.mapPopup(id, s.end.receivedAt, distLine(flown)));
       chip.className = 'chip ended';
       chip.textContent = 'Tracking ended';
       $('track-note').textContent = `Flight ${s.number} ended. Last position ${DT.ist(s.endedAt)}. ` +
         `A flight ends when no data arrives for ${duration(body.offlineAfterMs)}.`;
     }
+
+    renderDistance(s);
 
     if (fittedFor !== s.id && pts.length) {
       map.fitBounds(L.latLngBounds(pts.map(p => [p.lat, p.lon])), { padding: [50, 50], maxZoom: 17 });

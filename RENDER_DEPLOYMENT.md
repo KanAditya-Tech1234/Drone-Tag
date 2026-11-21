@@ -15,17 +15,23 @@ Files from this folder (`drone-tracker-updated/`):
 
 | File | Needed | Why |
 |---|---|---|
-| `server.js` | yes | the server (v1.1.0) |
+| `server.js` | yes | the server (v1.2.0) |
+| `lib/` | yes | server modules: accounts, flights, distance, data packets, export, API description |
+| `views/` | yes | dashboard pages (incl. Data packets and the API docs page `/docs`) |
+| `public/` | yes | dashboard CSS, scripts (incl. `js/geo.js`) and images |
 | `package.json`, `package-lock.json` | yes | dependencies, `npm start`, `npm test` |
 | `render.yaml` | yes | build / start commands, health check, env var names |
-| `public/index.html` | yes | dashboard |
-| `config.json` | yes | default transmission delay |
+| `config.json` | yes | default transmission delay (keep the committed one; local test delays do not belong in git) |
 | `.gitignore`, `.env.example` | yes | keeps `uploads/`, `node_modules/`, `.env` out of git |
-| `test/`, `postman/` | recommended | tests and Postman collection |
+| `test/`, `postman/` (collection, environment, sample files) | recommended | tests and Postman collection |
+| `tools/` | recommended | flight simulator and the offline-docs builder |
+| `docs/` | recommended | shareable offline API docs (`Drone-Tag-API-Docs.html`, `openapi.json`) |
 | `DRONE_TEAM_API_GUIDE.md`, `RENDER_DEPLOYMENT.md`, `TESTING_REPORT.md`, `README.md`, `API_FOR_DRONE_TEAM.md` | recommended | documentation |
 | `mobile/`, `new/`, `esp32s3_sim7670g/` | optional | phone app and device sketches |
 
-**Never commit** `uploads/`, `node_modules/` or a `.env` file. Also leave out `Hosting_Report_*.pdf` and `start-local.cmd` (local-only helper).
+**Never commit** `uploads/`, `node_modules/` or a `.env` file. Also leave out `Hosting_Report_*.pdf`, `start-local.cmd`,
+`LOCAL_TEST_LOGIN.md`, `.claude/`, `.postman/`, Postman's local workspace folders (`postman/collections/`, `postman/globals/` ...)
+and `tools/.swagger-ui-cache/` (local-only).
 
 ## Step 1: Push the code to the GitHub repository
 

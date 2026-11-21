@@ -50,7 +50,7 @@
         <a class="brand" href="/"><img src="/images/logo.png" alt="Abhyuday logo">
           <span><b>DRONE TAG</b><small>Abhyuday Bharat · live drone tracking</small></span></a>
         <nav class="nav">
-          ${user ? link('/', 'Live map', 'map') + link('/drone', 'Drone dashboard', 'drone') : ''}
+          ${user ? link('/', 'Live map', 'map') + link('/drone', 'Drone dashboard', 'drone') + link('/packets', 'Data packets', 'packets') : ''}
           ${link('/help', 'Help', 'help')}${link('/about', 'About', 'about')}
           ${user ? '' : link('/login', 'Log in', 'login') + link('/register', 'Register', 'register')}
         </nav>
@@ -120,22 +120,51 @@
     }),
   };
 
-  // Legend in the bottom-left corner of a map. kinds: any of 'start', 'live', 'end'.
+  // Flight boxes on the drone map (see the distance panel).
+  const BOX_STYLES = {
+    area: { color: '#2563eb', weight: 2, dashArray: '8 6', fillColor: '#2563eb', fillOpacity: 0.06 },
+    startEnd: { color: '#9333ea', weight: 2, dashArray: '3 6', fill: false },
+  };
+  const boxSvg = s => `<svg width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><rect x="1" y="1" width="14" height="10"
+    fill="${s.fill === false ? 'none' : s.fillColor}" fill-opacity="${s.fill === false ? 0 : 0.15}" stroke="${s.color}" stroke-width="1.6" stroke-dasharray="${s.dashArray.replace(' ', ',')}"/></svg>`;
+
+  // Legend in the bottom-left corner of a map. kinds: any of 'start', 'live', 'end', 'area', 'startEnd'.
+  // Returns the control; control.show(kind, visible) shows / hides one row.
   function legend(map, kinds) {
     const rows = {
       start: [pinSvg(PIN_COLORS.start, 15), 'Start point'],
       end: [pinSvg(PIN_COLORS.end, 15), 'End point'],
       live: [arrowSvg(17), 'Current live drone position'],
+      area: [boxSvg(BOX_STYLES.area), 'Flight area box'],
+      startEnd: [boxSvg(BOX_STYLES.startEnd), 'Start–end box'],
     };
     const control = L.control({ position: 'bottomleft' });
     control.onAdd = () => {
       const box = L.DomUtil.create('div', 'map-legend');
-      box.innerHTML = '<b>Legend</b>' + kinds.map(k => `<div class="legend-row"><span class="legend-icon">${rows[k][0]}</span>${rows[k][1]}</div>`).join('');
+      box.innerHTML = '<b>Legend</b>' + kinds.map(k => `<div class="legend-row" data-kind="${k}"><span class="legend-icon">${rows[k][0]}</span>${rows[k][1]}</div>`).join('');
       L.DomEvent.disableClickPropagation(box);
       return box;
     };
     control.addTo(map);
+    control.show = (kind, visible) => {
+      const row = control.getContainer().querySelector(`[data-kind="${kind}"]`);
+      if (row) row.hidden = !visible;
+    };
     return control;
+  }
+
+  // 0 -> "0 m", 850.4 -> "850 m", 1234 -> "1.23 km", 15400 -> "15.4 km"
+  function formatDistance(m) {
+    if (!Number.isFinite(m)) return '–';
+    if (m < 1000) return `${Math.round(m)} m`;
+    return `${(m / 1000).toFixed(m < 10000 ? 2 : 1)} km`;
+  }
+
+  // Area in m² -> "850 m²" / "1.2 ha" (1 hectare = 10,000 m²; 1 acre ≈ 4,047 m²)
+  function formatArea(m2) {
+    if (!Number.isFinite(m2)) return '–';
+    if (m2 < 10000) return `${Math.round(m2)} m²`;
+    return `${(m2 / 10000).toFixed(m2 < 100000 ? 2 : 1)} ha (${(m2 / 4046.86).toFixed(1)} acres)`;
   }
 
   // Popup text on the maps: only the Tracker ID and the date-time (IST).
@@ -389,6 +418,7 @@
 
   window.DT = {
     ist, esc, api, setStatus, header, baseLayers, markers, legend, mapPopup, safeNext,
+    formatDistance, formatArea, BOX_STYLES,
     recTime, istParts, matchesFilter, formatInterval, lightbox, droneBar, filterBar,
   };
 })();

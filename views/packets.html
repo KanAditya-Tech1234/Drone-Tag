@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data packets · Drone Tag</title>
+<link rel="icon" href="/images/logo.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack">
+  <div class="page-head">
+    <div>
+      <h1 id="title">Data packets</h1>
+      <p class="muted">Every data packet the drones send (POST /api/packet), newest at the top. New packets appear here by
+        themselves, without refreshing the page. Times are Indian Standard Time.</p>
+    </div>
+    <div class="chips"><span class="chip alt" id="live">Connecting…</span><span class="chip" id="count">–</span></div>
+  </div>
+
+  <section class="card">
+    <div class="actions packet-controls">
+      <label class="field">Drone
+        <select id="tracker"><option value="">All drones</option></select>
+      </label>
+      <button class="btn btn-outline" type="button" id="pause" aria-pressed="false">Pause</button>
+      <span class="muted" id="paused-note"></span>
+    </div>
+  </section>
+  <div id="status" class="hidden"></div>
+
+  <div class="gps-wrap tall">
+    <table class="gps packets">
+      <thead><tr>
+        <th>Time (IST)</th><th>ID</th><th class="num">Latitude</th><th class="num">Longitude</th>
+        <th class="num">Altitude (m)</th><th>Altitude reference</th>
+        <th class="num">Δx</th><th class="num">Δy</th><th class="num">Δz</th>
+      </tr></thead>
+      <tbody id="rows"><tr class="empty-row"><td colspan="9">Loading data packets…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted" style="font-size:13px;margin:0" id="foot">The table shows up to 500 packets. The server keeps the latest 5,000 packets of all drones;
+    older ones are removed automatically. "(received)" means the packet had no usable time, so the time it reached the server is shown.</p>
+</main>
+<script src="/js/common.js"></script>
+<script>
+(async () => {
+  await DT.header('packets');
+  const $ = id => document.getElementById(id);
+  const MAX_ROWS = 500;
+  let trackerId = new URLSearchParams(location.search).get('tracker') || '';
+  let rows = [];            // packets shown, newest first
+  let lastSeq = 0;          // newest seq received (the stream continues from here)
+  let total = 0;            // packets the server keeps for this view
+  let source = null;        // the live EventSource
+  let paused = false;
+  let held = [];            // packets that arrived while paused (shown on Resume)
+
+  const empty = text => `<tr class="empty-row"><td colspan="9">${text}</td></tr>`;
+  const num = (v, digits) => v === null || v === undefined || v === '' ? '<span class="muted">–</span>'
+    : DT.esc(typeof v === 'number' ? (digits === undefined ? String(+v.toFixed(4)) : v.toFixed(digits)) : v);
+  const rowHtml = (p, isNew) => `
+    <tr class="${isNew ? 'new-row' : ''}">
+      <td>${DT.ist(DT.recTime(p))}${p.timeSource === 'server' ? ' <span class="src">(received)</span>' : ''}</td>
+      <td>${DT.esc(p.trackerId)}</td>
+      <td class="num">${num(p.lat, 6)}</td><td class="num">${num(p.long, 6)}</td>
+      <td class="num">${num(p.altitude)}</td><td>${num(p.altitudeReference)}</td>
+      <td class="num">${num(p.deltaX)}</td><td class="num">${num(p.deltaY)}</td><td class="num">${num(p.deltaZ)}</td>
+    </tr>`;
+
+  function setCount() {
+    $('count').textContent = `${total} packet${total === 1 ? '' : 's'}` + (total > rows.length ? ` (latest ${rows.length} shown)` : '');
+  }
+  function setLive(state) {
+    const chip = $('live');
+    if (paused) { chip.className = 'chip alt'; chip.textContent = 'Paused'; return; }
+    chip.className = state === 'live' ? 'chip live' : state === 'down' ? 'chip ended' : 'chip alt';
+    chip.textContent = state === 'live' ? 'Live' : state === 'down' ? 'Reconnecting…' : 'Connecting…';
+  }
+
+  function renderAll() {
+    $('rows').innerHTML = rows.length ? rows.map(p => rowHtml(p, false)).join('')
+      : empty(trackerId ? `No data packets from ${DT.esc(trackerId)} yet. They will appear here as soon as they arrive.`
+                        : 'No data packets yet. They will appear here as soon as a drone sends one.');
+    setCount();
+  }
+
+  // New packets go on top of the table without redrawing the rows already there.
+  function addLive(list) {
+    if (!list.length) return;
+    if (!rows.length) $('rows').innerHTML = '';
+    const newestFirst = list.slice().reverse();
+    rows = newestFirst.concat(rows);
+    total += list.length;
+    $('rows').insertAdjacentHTML('afterbegin', newestFirst.map(p => rowHtml(p, true)).join(''));
+    const body = $('rows');
+    while (rows.length > MAX_ROWS) { rows.pop(); body.lastElementChild.remove(); }
+    setCount();
+  }
+
+  function fillDroneList(ids) {
+    const sel = $('tracker');
+    const have = new Set([...sel.options].map(o => o.value.toLowerCase()));
+    ids.filter(id => !have.has(String(id).toLowerCase()))
+      .forEach(id => sel.add(new Option(id, id)));
+    sel.value = [...sel.options].find(o => o.value.toLowerCase() === trackerId.toLowerCase())?.value || '';
+  }
+
+  function connect() {
+    if (source) source.close();
+    const q = new URLSearchParams({ since: String(lastSeq) });
+    if (trackerId) q.set('trackerId', trackerId);
+    source = new EventSource('/api/packet-stream?' + q);
+    setLive('connecting');
+    source.onopen = () => setLive('live');
+    // The browser reconnects by itself after a network drop and gets the packets it missed.
+    source.onerror = () => setLive('down');
+    source.addEventListener('packet', e => {
+      const p = JSON.parse(e.data);
+      if (p.seq <= lastSeq) return;                 // already shown
+      lastSeq = p.seq;
+      fillDroneList([p.trackerId]);
+      if (paused) {
+        held.push(p);
+        $('paused-note').textContent = `${held.length} new packet${held.length === 1 ? '' : 's'} waiting`;
+      } else {
+        addLive([p]);
+      }
+    });
+    // All data was cleared on the server.
+    source.addEventListener('reset', () => { rows = []; held = []; total = 0; lastSeq = 0; renderAll(); });
+  }
+
+  async function load() {
+    DT.setStatus($('status'), '');
+    $('title').textContent = trackerId ? `Data packets · ${trackerId}` : 'Data packets';
+    document.title = (trackerId ? `${trackerId} · ` : '') + 'Data packets · Drone Tag';
+    const url = (trackerId ? '/api/packet/' + encodeURIComponent(trackerId) : '/api/packet') + '?limit=' + MAX_ROWS;
+    const res = await DT.api(url);
+    if (res.ok || res.status === 404) {
+      const body = res.body || {};
+      rows = (res.ok ? body.packets : []).slice().reverse();
+      total = res.ok ? body.count : 0;
+      // Continue the live feed from the newest packet the server had when the table was loaded.
+      lastSeq = res.ok ? body.seq : (rows[0] ? rows[0].seq : 0);
+      fillDroneList(body.trackers || []);
+      renderAll();
+    } else {
+      DT.setStatus($('status'), 'Could not load the data packets. They will appear as soon as the connection works.', 'err');
+      rows = []; total = 0; renderAll();
+    }
+    connect();
+  }
+
+  $('tracker').addEventListener('change', () => {
+    trackerId = $('tracker').value;
+    history.replaceState(null, '', '/packets' + (trackerId ? '?tracker=' + encodeURIComponent(trackerId) : ''));
+    held = [];
+    $('paused-note').textContent = '';
+    load();
+  });
+
+  $('pause').addEventListener('click', () => {
+    paused = !paused;
+    $('pause').textContent = paused ? 'Resume' : 'Pause';
+    $('pause').setAttribute('aria-pressed', String(paused));
+    if (!paused) { addLive(held); held = []; $('paused-note').textContent = ''; }
+    setLive(source && source.readyState === EventSource.OPEN ? 'live' : 'connecting');
+  });
+
+  // Fill the drone list with registered drones too (not only those that sent packets).
+  DT.api('/api/drones').then(r => { if (r.ok) fillDroneList(r.body.drones.map(d => d.trackerId)); });
+  await load();
+})();
+</script>
+</body>
+</html>

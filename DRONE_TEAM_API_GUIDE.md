@@ -11,6 +11,7 @@ Everything you need to send data from a drone or tracker to the Drone Tag server
 | Item | Value |
 |---|---|
 | Base URL (temporary test hosting) | `https://drone-tag-hixr.onrender.com` |
+| **Interactive API docs** | **`https://drone-tag-hixr.onrender.com/docs`** (Swagger UI: every endpoint with fields, examples and "Try it out") |
 | Environment | Render free web service, **for testing only**. The final server will be a Hostinger VPS; only the base URL changes then. |
 | API version | 1.1.1 (`package.json`) |
 | Authentication | **None**: no key or token is needed for any request |
@@ -129,6 +130,11 @@ Returns `latest` (newest position), `points` (trail, oldest first), `photos` (ev
 - `?photo=<photoId>` or `?photo=latest`: returns **the image file itself**, exactly as uploaded.
 - `GET /api/data` (no TrackerId): all trackers together.
 - Unknown TrackerId → `404` with the list of known trackers.
+- **Distance covered:** each flight in `sessions` has a `distance` object.
+  `flownM` is the distance flown along the path, in metres: the sum of all GPS hops, ignoring jitter under 3 m and bad fixes. It also has
+  `straightLineM`, `startEndBox`, `areaBox` (with `areaM2`), `durationSec` and `avgSpeedKmh`.
+  Each point has `distanceFromStartM`, and a skipped bad fix has `"gpsJump": true`.
+  Nothing changes for the drone: the server calculates all of this from the positions it already receives. Sending positions more often gives a more exact distance.
 
 ---
 
@@ -208,6 +214,48 @@ Compare `sha256` with your own file to confirm it arrived intact.
 ```bash
 curl "https://drone-tag-hixr.onrender.com/api/config/TEST-DRONE-01"
 curl "https://drone-tag-hixr.onrender.com/api/config/TEST-DRONE-01?file=latest" -o latest-config
+```
+
+---
+
+### 6. `POST /api/packet`: data packets
+
+```
+POST https://drone-tag-hixr.onrender.com/api/packet
+Content-Type: application/json
+```
+```json
+{
+  "id": "1005",
+  "lat": 23.078143,
+  "lon": 72.531243,
+  "Alt": 16.5,
+  "Alt_R": "AGL",
+  "d_x": 0.32,
+  "d_y": -0.18,
+  "d_z": 0.19
+}
+```
+
+| Field | Meaning | Required | Type / range |
+|---|---|---|---|
+| `id` | Drone / tag ID | yes | text (1-64 letters, digits, `.`, `_`, `-`) or a whole number |
+| `lat` | Latitude | yes | number, -90..90 |
+| `lon` | Longitude | yes | number, -180..180 |
+| `Alt` | Altitude (metres) | no | number |
+| `Alt_R` | Altitude reference | no | text up to 40 characters (e.g. `MSL`, `AGL`) **or** a number |
+| `d_x`, `d_y`, `d_z` | Deltas | no | numbers |
+| `Timestamp` | Device time | no | IST `YYYY-MM-DD HH:MM:SS` (else the arrival time is used) |
+
+- Field names ignore case, `_`, `-` and spaces (`Alt_R` = `alt_r` = `AltR`). The earlier long names still work: `long`, `Altitude`, `Altitude Reference`, `delta_x` ... Numbers may be sent as text.
+- Up to **100 packets in one request** as a JSON array: all are stored, or none if any is invalid.
+- Reply `201`: `{"status":"ok","intervalMs":5000,"packetId":"…","seq":12}`. Unknown fields are listed in `ignoredFields` and not stored.
+- Invalid → `400` with every problem in `errors`.
+- Read back: `GET /api/packet/1005` (one drone) or `GET /api/packet` (all), oldest first, `?since=<seq>`, `?limit=N`. The reply names the fields `trackerId, lat, long, altitude, altitudeReference, deltaX, deltaY, deltaZ`.
+- Live feed: `GET /api/packet-stream` (Server-Sent Events). The dashboard page **Data packets** shows every new packet at once, without refreshing.
+
+```bash
+curl -X POST "https://drone-tag-hixr.onrender.com/api/packet" -H "Content-Type: application/json" -d "{\"id\":\"1005\",\"lat\":23.078143,\"lon\":72.531243,\"Alt\":16.5,\"Alt_R\":\"AGL\",\"d_x\":0.32,\"d_y\":-0.18,\"d_z\":0.19}"
 ```
 
 ---
